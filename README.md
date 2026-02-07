@@ -466,4 +466,4 @@ An AI-designed project, built by another AI, intended for AI agents to use. It's
 
 ## License
 
-ISC
+MIT

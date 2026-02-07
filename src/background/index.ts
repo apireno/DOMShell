@@ -25,6 +25,21 @@ const state: ShellState = {
 };
 
 let nodeMap: Map<string, AXNode> = new Map();
+let treeStale = false;
+
+// ---- CDP Event Listener for DOM / Navigation Changes ----
+
+chrome.debugger.onEvent.addListener((source, method) => {
+  if (source.tabId !== state.attachedTabId) return;
+
+  if (
+    method === "Page.frameNavigated" ||
+    method === "Page.loadEventFired" ||
+    method === "DOM.documentUpdated"
+  ) {
+    treeStale = true;
+  }
+});
 
 // ---- Open Side Panel on Action Click ----
 
@@ -374,7 +389,7 @@ async function executeCommand(raw: string): Promise<string> {
       case "grep":
         return await handleGrep(args);
       case "find":
-        return handleFind(args);
+        return await handleFind(args);
       case "whoami":
         return await handleWhoami();
       case "env":
@@ -386,7 +401,7 @@ async function executeCommand(raw: string): Promise<string> {
       case "refresh":
         return await handleRefresh();
       case "debug":
-        return handleDebug(args);
+        return await handleDebug(args);
       case "clear":
         return "\x1b[2J\x1b[H";
       default:
@@ -546,6 +561,33 @@ function getCurrentNodeId(): string {
   return state.cwd[state.cwd.length - 1];
 }
 
+/**
+ * If the DOM/page has changed since last fetch, re-fetch the AX tree.
+ * Returns a status message if refresh happened, empty string otherwise.
+ */
+async function ensureFreshTree(): Promise<string> {
+  if (!treeStale) return "";
+
+  treeStale = false;
+
+  const axNodes = await cdp.getAllFrameAXTrees();
+  nodeMap = buildNodeMap(axNodes);
+
+  // Check if current CWD still exists in the new tree
+  const currentId = state.cwd[state.cwd.length - 1];
+  if (currentId && !nodeMap.has(currentId)) {
+    // CWD is gone — page navigated, reset to root
+    const root = findRootNode(nodeMap);
+    if (root) {
+      state.cwd = [root.nodeId];
+      state.cwdNames = ["/"];
+    }
+    return `\x1b[33m(page changed — tree refreshed, ${nodeMap.size} nodes, CWD reset to /)\x1b[0m\r\n`;
+  }
+
+  return `\x1b[90m(tree auto-refreshed, ${nodeMap.size} nodes)\x1b[0m\r\n`;
+}
+
 // ---- Tab Completion ----
 
 const COMMANDS = [
@@ -588,6 +630,7 @@ function getCompletions(partial: string, command: string): string[] {
 
 async function handleLs(args: string[]): Promise<string> {
   ensureAttached();
+  const refreshMsg = await ensureFreshTree();
 
   const pa = parseArgs(args);
   const longFormat = pa.flags.has("-l");
@@ -666,7 +709,7 @@ async function handleLs(args: string[]): Promise<string> {
     lines.push(`\x1b[90m... ${offset + 1}-${offset + children.length} of ${total}\x1b[0m`);
   }
 
-  return lines.join("\r\n");
+  return refreshMsg + lines.join("\r\n");
 }
 
 function formatColoredName(node: VFSNode): string {
@@ -697,6 +740,7 @@ function formatColoredName(node: VFSNode): string {
 
 async function handleCd(args: string[]): Promise<string> {
   ensureAttached();
+  await ensureFreshTree();
 
   if (args.length === 0 || args[0] === "/") {
     const root = findRootNode(nodeMap);
@@ -756,6 +800,7 @@ function handlePwd(): string {
 
 async function handleCat(args: string[]): Promise<string> {
   ensureAttached();
+  await ensureFreshTree();
 
   if (args.length === 0) {
     return "\x1b[31mUsage: cat <name> (see cat --help)\x1b[0m";
@@ -812,6 +857,7 @@ async function handleCat(args: string[]): Promise<string> {
 
 async function handleClick(args: string[]): Promise<string> {
   ensureAttached();
+  await ensureFreshTree();
 
   if (args.length === 0) {
     return "\x1b[31mUsage: click <name> (see click --help)\x1b[0m";
@@ -831,11 +877,14 @@ async function handleClick(args: string[]): Promise<string> {
 
   try {
     await cdp.clickByBackendNodeId(match.backendDOMNodeId);
-    return `\x1b[32m✓ Clicked: ${match.name} (${match.role})\x1b[0m`;
+    // Mark tree stale — click may trigger navigation or DOM changes
+    treeStale = true;
+    return `\x1b[32m✓ Clicked: ${match.name} (${match.role})\x1b[0m\r\n\x1b[90m(tree will auto-refresh on next command)\x1b[0m`;
   } catch {
     try {
       await cdp.clickByCoordinates(match.backendDOMNodeId);
-      return `\x1b[32m✓ Clicked (coords): ${match.name} (${match.role})\x1b[0m`;
+      treeStale = true;
+      return `\x1b[32m✓ Clicked (coords): ${match.name} (${match.role})\x1b[0m\r\n\x1b[90m(tree will auto-refresh on next command)\x1b[0m`;
     } catch (err: any) {
       return `\x1b[31mclick failed: ${err.message}\x1b[0m`;
     }
@@ -846,6 +895,7 @@ async function handleClick(args: string[]): Promise<string> {
 
 async function handleFocus(args: string[]): Promise<string> {
   ensureAttached();
+  await ensureFreshTree();
 
   if (args.length === 0) {
     return "\x1b[31mUsage: focus <name> (see focus --help)\x1b[0m";
@@ -885,6 +935,7 @@ async function handleType(args: string[]): Promise<string> {
 
 async function handleGrep(args: string[]): Promise<string> {
   ensureAttached();
+  await ensureFreshTree();
 
   const pa = parseArgs(args);
   const recursive = pa.flags.has("-r");
@@ -928,8 +979,9 @@ async function handleGrep(args: string[]): Promise<string> {
 
 // ---- find (deep recursive search with full paths) ----
 
-function handleFind(args: string[]): string {
+async function handleFind(args: string[]): Promise<string> {
   ensureAttached();
+  await ensureFreshTree();
 
   const pa = parseArgs(args);
   const typeFilter = pa.named["--type"]?.toLowerCase();
@@ -1025,6 +1077,7 @@ function collectAllDescendants(
 
 async function handleTree(args: string[]): Promise<string> {
   ensureAttached();
+  await ensureFreshTree();
 
   const pa = parseArgs(args);
   const maxDepth = pa.positional[0] ? parseInt(pa.positional[0], 10) : 2;
@@ -1133,8 +1186,9 @@ function handleExport(args: string[]): string {
 
 // ---- debug ----
 
-function handleDebug(args: string[]): string {
+async function handleDebug(args: string[]): Promise<string> {
   ensureAttached();
+  await ensureFreshTree();
 
   const sub = args[0] ?? "stats";
   const currentId = getCurrentNodeId();

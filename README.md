@@ -13,7 +13,7 @@ This means an agent can:
 - **Navigate** into sections with `cd navigation/` instead of guessing coordinates
 - **Act** on elements with `click submit_btn` instead of fragile DOM queries
 - **Read** content with `cat` instead of scraping innerHTML
-- **Search** for elements with `grep` instead of writing selectors
+- **Search** for elements with `find --type combobox` instead of writing selectors
 
 The filesystem abstraction is deterministic, semantic, and works on any website — no site-specific adapters needed.
 
@@ -23,7 +23,7 @@ The filesystem abstraction is deterministic, semantic, and works on any website 
 
 ```bash
 git clone https://github.com/apireno/AgenticShell.git
-cd AgenticShell
+cd AgentShell
 npm install
 npm run build
 ```
@@ -62,6 +62,7 @@ agent@shell:$ attach
   Title: Example Website
   URL:   https://example.com
   AX Nodes: 247
+  Iframes: 2
 ```
 
 ### Navigating the DOM
@@ -76,12 +77,25 @@ contentinfo/
 skip_to_content_link
 logo_link
 
-# Long format shows roles
+# Long format shows type prefixes and roles
 agent@shell:$ ls -l
-d navigation     navigation/
-d main           main/
-- link           skip_to_content_link
-- link           logo_link
+[d] navigation     navigation/
+[d] main           main/
+[x] link           skip_to_content_link
+[x] link           logo_link
+
+# Filter by type
+agent@shell:$ ls --type link
+skip_to_content_link
+logo_link
+
+# Paginate large directories
+agent@shell:$ ls -n 10              # First 10 items
+agent@shell:$ ls -n 10 --offset 10  # Items 11-20
+
+# Count children by type
+agent@shell:$ ls --count
+45 total (12 [d], 28 [x], 5 [-])
 
 # Enter a directory (container element)
 agent@shell:$ cd navigation
@@ -100,6 +114,16 @@ agent@shell:$ cd /
 agent@shell:$ cd main/article/form
 ```
 
+### Type Prefixes
+
+Every node has a type prefix that communicates metadata without relying on color alone:
+
+| Prefix | Meaning | Examples |
+|--------|---------|---------|
+| `[d]` | Directory (container, `cd`-able) | `navigation/`, `form/`, `main/` |
+| `[x]` | Interactive (clickable/focusable) | buttons, links, inputs, checkboxes |
+| `[-]` | Static (read-only) | headings, images, text |
+
 ### Reading Content
 
 ```bash
@@ -107,19 +131,55 @@ agent@shell:$ cd main/article/form
 agent@shell:$ cat submit_btn
 --- submit_btn ---
   Role:  button
+  Type:  [x] interactive
   AXID:  42
+  DOM:   backend#187
   Text:  Submit Form
 
 # Get a tree view (default depth: 2)
 agent@shell:$ tree
 navigation/
-├── home_link
-├── about_link
-├── products_link
-└── contact_link
+├── [x] home_link
+├── [x] about_link
+├── [x] products_link
+└── [x] contact_link
 
 # Deeper tree
 agent@shell:$ tree 4
+```
+
+### Searching
+
+```bash
+# Search current directory
+agent@shell:$ grep login
+[x] login_btn (button)
+[d] login_form (form)
+[x] login_link (link)
+
+# Recursive search across all descendants
+agent@shell:$ grep -r search
+[x] search_search (combobox)
+[x] search_btn (button)
+
+# Limit results
+agent@shell:$ grep -r -n 5 link
+
+# Deep search with full paths (like Unix find)
+agent@shell:$ find search
+[x] /search_2/search_search (combobox)
+[x] /search_2/search_btn (button)
+
+# Find by role type
+agent@shell:$ find --type combobox
+[x] /search_2/search_search (combobox)
+
+agent@shell:$ find --type textbox
+[x] /main/form/email_input (textbox)
+[x] /main/form/name_input (textbox)
+
+# Limit results
+agent@shell:$ find --type link -n 5
 ```
 
 ### Interacting with Elements
@@ -128,6 +188,7 @@ agent@shell:$ tree 4
 # Click a button or link
 agent@shell:$ click submit_btn
 ✓ Clicked: submit_btn (button)
+(tree will auto-refresh on next command)
 
 # Focus an input field
 agent@shell:$ focus email_input
@@ -138,15 +199,54 @@ agent@shell:$ type hello@example.com
 ✓ Typed 17 characters
 ```
 
-### Searching
+### Auto-Refresh on DOM Changes
+
+AgentShell automatically detects when the page changes — navigation, DOM mutations, or content updates from clicks. You no longer need to manually run `refresh`:
 
 ```bash
-# Search current directory for matching elements
-agent@shell:$ grep login
-📄 login_btn (button)
-📁 login_form (form)
-📄 login_link (link)
+agent@shell:$ click search_btn
+✓ Clicked: search_btn (button)
+(tree will auto-refresh on next command)
+
+agent@shell:$ ls
+(page changed — tree refreshed, 312 nodes, CWD reset to /)
+main/
+navigation/
+search_results/
+...
 ```
+
+If the page navigated, CWD is reset to `/`. If the DOM just updated in place, your CWD is preserved. You can still force a manual refresh:
+
+```bash
+agent@shell:$ refresh
+✓ Refreshed. 312 AX nodes loaded.
+```
+
+### Tab Completion
+
+Press `Tab` to auto-complete commands and element names — works like bash:
+
+```bash
+agent@shell:$ at<Tab>
+# completes to: attach
+
+agent@shell:$ cd nav<Tab>
+# completes to: cd navigation/
+
+agent@shell:$ click sub<Tab>
+# if multiple matches, shows options:
+#   submit_btn
+#   subscribe_link
+```
+
+- Single match: auto-completes inline
+- Multiple matches: shows options below, fills the longest common prefix
+- `cd` only completes directories; other commands complete all elements
+
+### Paste Support
+
+Cmd+V (Mac) / Ctrl+V (Windows/Linux) pastes text directly into the terminal. Multi-line pastes are flattened to a single line.
 
 ### System Commands
 
@@ -167,9 +267,34 @@ TERM=xterm-256color
 # Set a variable
 agent@shell:$ export API_KEY=sk-abc123
 
-# Re-fetch the AX tree after page navigation or DOM changes
-agent@shell:$ refresh
-✓ Refreshed. 312 AX nodes loaded.
+# Debug the raw AX tree
+agent@shell:$ debug stats
+--- Debug Stats ---
+  Total AX nodes:   247
+  Ignored nodes:    83
+  Generic nodes:    41
+  With children:    62
+  Iframes:          2
+```
+
+### Getting Help
+
+Every command supports `--help`:
+
+```bash
+agent@shell:$ ls --help
+ls — List children of the current node
+
+Usage: ls [options]
+
+Options:
+  -l, --long      Long format: type prefix, role, and name
+  -r, --recursive Show nested children (one level deep)
+  -n N            Limit output to first N entries
+  --offset N      Skip first N entries (for pagination)
+  --type ROLE     Filter by AX role (e.g. --type button)
+  --count         Show count of children only
+...
 ```
 
 ## Command Reference
@@ -179,26 +304,28 @@ agent@shell:$ refresh
 | `help` | Show all available commands |
 | `attach` | Connect to the active browser tab via CDP |
 | `detach` | Disconnect from the current tab |
-| `refresh` | Re-fetch the Accessibility Tree |
-| `ls [-l]` | List children of the current node |
-| `cd <name>` | Enter a child container (`..` for parent, `/` for root) |
+| `refresh` | Force re-fetch the Accessibility Tree |
+| `ls [options]` | List children (`-l`, `-r`, `-n N`, `--offset N`, `--type ROLE`, `--count`) |
+| `cd <path>` | Navigate (`..` for parent, `/` for root, `main/form` for multi-level) |
 | `pwd` | Print current path in the AX tree |
 | `tree [depth]` | Tree view of current node (default depth: 2) |
-| `cat <name>` | Read an element's role, value, and text content |
-| `grep <pattern>` | Search children by name, role, or value |
-| `click <name>` | Click an element |
+| `cat <name>` | Read element's role, type, value, DOM ID, and text content |
+| `grep [opts] <pattern>` | Search children by name/role/value (`-r` recursive, `-n N` limit) |
+| `find [opts] <pattern>` | Deep recursive search with full paths (`--type ROLE`, `-n N`) |
+| `click <name>` | Click an element (falls back to coordinate-based click) |
 | `focus <name>` | Focus an input element |
 | `type <text>` | Type text into the focused element |
 | `whoami` | Check session/auth cookies for the current page |
 | `env` | Show environment variables |
 | `export K=V` | Set an environment variable |
+| `debug [sub]` | Inspect raw AX tree (`stats`, `raw`, `node <id>`) |
 | `clear` | Clear the terminal |
 
 ## How the Filesystem Mapping Works
 
 AgentShell reads the browser's **Accessibility Tree** (AXTree) via the Chrome DevTools Protocol. Each AX node gets mapped to a virtual file or directory:
 
-**Directories** (container roles): `navigation/`, `main/`, `form/`, `list/`, `region/`, `dialog/`, `menu/`, `table/`, etc.
+**Directories** (container roles): `navigation/`, `main/`, `form/`, `search/`, `list/`, `region/`, `dialog/`, `menu/`, `table/`, `Iframe/`, etc.
 
 **Files** (interactive/leaf roles): `submit_btn`, `home_link`, `email_input`, `agree_chk`, `theme_switch`, etc.
 
@@ -217,51 +344,67 @@ Names are generated from the node's accessible name and role:
 
 Duplicate names are automatically disambiguated with `_2`, `_3`, etc.
 
-### Color Coding in `ls`
+### Node Flattening
 
-- **Blue (bold)** — Directories (containers)
-- **Green (bold)** — Buttons
-- **Magenta (bold)** — Links
-- **Yellow (bold)** — Text inputs / search boxes
-- **Cyan (bold)** — Checkboxes / radio buttons / switches
-- **White** — Other elements
+The AX tree contains many "wrapper" nodes — ignored nodes, unnamed generics, and role=none elements that add structural noise without semantic meaning. AgentShell recursively flattens through these, promoting their children up so you see the meaningful elements without navigating through layers of invisible divs.
+
+### Iframe Support
+
+AgentShell discovers iframes via `Page.getFrameTree` and fetches each iframe's AX tree separately. Iframe nodes are merged into the main tree with prefixed IDs to avoid collisions, so elements inside iframes appear naturally in the filesystem.
+
+### Color Coding
+
+| Color | Meaning |
+|---|---|
+| **Blue (bold)** | Directories (containers) |
+| **Green (bold)** | Buttons |
+| **Magenta (bold)** | Links |
+| **Yellow (bold)** | Text inputs / search boxes |
+| **Cyan (bold)** | Checkboxes / radio / switches |
+| **White** | Other elements |
+| **Gray** | Images, metadata |
 
 ## Architecture
 
 ```
 ┌─────────────────────┐     chrome.runtime.connect()     ┌─────────────────────┐
 │   Side Panel (UI)   │ ◄──────────────────────────────► │  Background Worker  │
-│                     │    STDIN/STDOUT messages          │   (Shell Kernel)    │
-│  React + Xterm.js   │                                   │                     │
-│  Dumb terminal —    │                                   │  Command parser     │
-│  captures keys,     │                                   │  Shell state (CWD)  │
-│  renders text       │                                   │  VFS mapper         │
-│                     │                                   │  CDP client         │
+│                     │    STDIN/STDOUT/COMPLETE          │   (Shell Kernel)    │
+│  React + Xterm.js   │    messages                       │                     │
+│                     │                                   │  Command parser     │
+│  - Paste support    │                                   │  Shell state (CWD)  │
+│  - Tab completion   │                                   │  VFS mapper         │
+│  - Command history  │                                   │  CDP client         │
+│  - Tokyo Night      │                                   │  DOM change detect  │
 └─────────────────────┘                                   └────────┬────────────┘
                                                                    │
                                                           chrome.debugger
+                                                          (CDP 1.3)
                                                                    │
                                                           ┌────────▼────────────┐
                                                           │   Active Tab        │
                                                           │   Accessibility     │
-                                                          │   Tree (AXTree)     │
+                                                          │   Tree + iframes    │
+                                                          │                     │
+                                                          │   DOM events ──────►│
+                                                          │   (auto-refresh)    │
                                                           └─────────────────────┘
 ```
 
-The extension follows a **Thin Client / Fat Host** model. The side panel is a dumb terminal — it captures keystrokes and renders ANSI-colored text. All logic lives in the background service worker: command parsing, AX tree traversal, filesystem mapping, and CDP interaction.
+The extension follows a **Thin Client / Fat Host** model. The side panel is a dumb terminal — it captures keystrokes, handles paste, and renders ANSI-colored text. All logic lives in the background service worker: command parsing, AX tree traversal, filesystem mapping, CDP interaction, and DOM change detection.
 
 ### Source Layout
 
 ```
 src/
   background/
-    index.ts        # Shell Kernel — command parser, state manager, message router
-    cdp_client.ts   # Promise-wrapped chrome.debugger API
+    index.ts        # Shell kernel — commands, state, message router, auto-refresh
+    cdp_client.ts   # Promise-wrapped chrome.debugger API + iframe discovery
     vfs_mapper.ts   # Accessibility Tree → virtual filesystem mapping
   sidepanel/
     index.html      # Side panel entry HTML
-    index.tsx       # React entry point
-    Terminal.tsx    # Xterm.js terminal component (Tokyo Night theme)
+    index.tsx        # React entry point
+    Terminal.tsx     # Xterm.js terminal (paste, tab completion, history)
   shared/
     types.ts        # Message types, AXNode interfaces, role constants
 public/
@@ -273,8 +416,8 @@ public/
 - **React** + **TypeScript** — Side panel UI
 - **Xterm.js** (`@xterm/xterm`) — Terminal emulator with Tokyo Night color scheme
 - **Vite** — Build tooling with multi-entry Chrome Extension support
-- **Chrome DevTools Protocol** (CDP) via `chrome.debugger` — AX tree access and element interaction
-- **Chrome Manifest V3** — `sidePanel`, `debugger`, `activeTab`, `cookies` permissions
+- **Chrome DevTools Protocol** (CDP 1.3) via `chrome.debugger` — AX tree access, element interaction, iframe discovery, DOM mutation events
+- **Chrome Manifest V3** — `sidePanel`, `debugger`, `activeTab`, `cookies`, `storage` permissions
 
 ## Development
 
@@ -289,7 +432,29 @@ npm run build
 npm run typecheck
 ```
 
-After building, reload the extension in `chrome://extensions/` to pick up changes.
+After building, reload the extension on `chrome://extensions/` and reopen the side panel to pick up changes.
+
+## Connecting AI Agents
+
+AgentShell's command/response model (`STDIN` in, `STDOUT` out) is designed to be driven programmatically. To connect an LLM like Claude or GPT:
+
+| Approach | Best For | How It Works |
+|----------|----------|-------------|
+| **MCP Server** | Claude Desktop | Node.js process exposes AgentShell commands as MCP tools, bridges to extension via WebSocket |
+| **HTTP API** | Any LLM with tool use | Local HTTP server relays commands to the extension, any function-calling LLM can use it |
+| **Native Messaging** | Single-machine setups | Chrome's `chrome.runtime.connectNative()` pipes stdin/stdout to a registered host binary |
+
+The bridge architecture:
+
+```
+LLM (Claude / GPT / etc.)
+  ↓ tool calls
+MCP Server or HTTP API
+  ↓ WebSocket or Native Messaging
+Chrome Extension Background Service Worker
+  ↓ CDP
+Browser DOM
+```
 
 ## How This Project Was Built
 

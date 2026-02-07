@@ -29,6 +29,7 @@ export class CDPClient {
     // Enable required CDP domains
     await this.send("Accessibility.enable");
     await this.send("DOM.enable");
+    await this.send("Page.enable");
     await this.send("Runtime.enable");
   }
 

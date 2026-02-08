@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>AgentShell Settings</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 14px;
+      color: #202124;
+      background: #fff;
+      padding: 24px;
+      min-width: 400px;
+      max-width: 520px;
+    }
+
+    h1 {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    .subtitle {
+      font-size: 12px;
+      color: #5f6368;
+      margin-bottom: 20px;
+    }
+
+    /* Warning banner */
+    .warning {
+      background: #fef7e0;
+      border: 1px solid #f9ab00;
+      border-radius: 8px;
+      padding: 12px 14px;
+      margin-bottom: 20px;
+      font-size: 12px;
+      line-height: 1.5;
+      color: #3c4043;
+    }
+    .warning strong { color: #e37400; }
+
+    /* Status indicator */
+    .status-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 14px;
+      background: #f8f9fa;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      font-size: 13px;
+    }
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .status-dot.disabled { background: #9aa0a6; }
+    .status-dot.connecting { background: #f9ab00; animation: pulse 1.5s infinite; }
+    .status-dot.connected { background: #1e8e3e; }
+    .status-dot.disconnected { background: #d93025; }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    /* Form */
+    .field {
+      margin-bottom: 16px;
+    }
+    .field label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      color: #3c4043;
+      margin-bottom: 6px;
+    }
+    .field input[type="text"],
+    .field input[type="number"] {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid #dadce0;
+      border-radius: 4px;
+      font-size: 14px;
+      font-family: monospace;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .field input:focus {
+      border-color: #1a73e8;
+      box-shadow: 0 0 0 2px rgba(26, 115, 232, 0.15);
+    }
+    .field .hint {
+      font-size: 11px;
+      color: #80868b;
+      margin-top: 4px;
+    }
+
+    /* Toggle */
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 20px;
+    }
+    .toggle-row label {
+      font-size: 14px;
+      font-weight: 500;
+    }
+    .toggle {
+      position: relative;
+      width: 44px;
+      height: 24px;
+    }
+    .toggle input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .toggle .slider {
+      position: absolute;
+      cursor: pointer;
+      inset: 0;
+      background: #dadce0;
+      border-radius: 12px;
+      transition: background 0.2s;
+    }
+    .toggle .slider::before {
+      content: "";
+      position: absolute;
+      width: 18px;
+      height: 18px;
+      left: 3px;
+      bottom: 3px;
+      background: #fff;
+      border-radius: 50%;
+      transition: transform 0.2s;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    }
+    .toggle input:checked + .slider {
+      background: #1a73e8;
+    }
+    .toggle input:checked + .slider::before {
+      transform: translateX(20px);
+    }
+
+    /* Buttons */
+    .actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 20px;
+    }
+    button {
+      padding: 8px 20px;
+      border-radius: 4px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      border: none;
+      transition: background 0.2s;
+    }
+    button.primary {
+      background: #1a73e8;
+      color: #fff;
+    }
+    button.primary:hover { background: #1557b0; }
+    button.secondary {
+      background: #fff;
+      color: #1a73e8;
+      border: 1px solid #dadce0;
+    }
+    button.secondary:hover { background: #f8f9fa; }
+
+    /* Saved flash */
+    .saved-msg {
+      font-size: 13px;
+      color: #1e8e3e;
+      margin-left: 8px;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+    .saved-msg.show { opacity: 1; }
+  </style>
+</head>
+<body>
+  <h1>AgentShell</h1>
+  <p class="subtitle">MCP Bridge Settings</p>
+
+  <div class="warning">
+    <strong>Security Notice:</strong> Enabling the MCP bridge allows an external process
+    (like Claude Desktop) to execute commands in your browser — navigating the DOM,
+    clicking elements, and reading page content. Only enable this if you started the MCP
+    server yourself and trust the connected AI assistant.
+  </div>
+
+  <div class="status-bar">
+    <span class="status-dot disabled" id="statusDot"></span>
+    <span id="statusText">Disabled</span>
+  </div>
+
+  <div class="toggle-row">
+    <label for="enableToggle">Enable MCP Bridge</label>
+    <label class="toggle">
+      <input type="checkbox" id="enableToggle">
+      <span class="slider"></span>
+    </label>
+  </div>
+
+  <div class="field">
+    <label for="tokenInput">Auth Token</label>
+    <input type="text" id="tokenInput" placeholder="Paste token from MCP server">
+    <div class="hint">From your Claude Desktop config or MCP server output</div>
+  </div>
+
+  <div class="field">
+    <label for="portInput">Port</label>
+    <input type="number" id="portInput" value="9876" min="1024" max="65535">
+    <div class="hint">Default: 9876 — must match the MCP server's --port flag</div>
+  </div>
+
+  <div class="actions">
+    <button class="primary" id="saveBtn">Save</button>
+    <span class="saved-msg" id="savedMsg">Saved</span>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>

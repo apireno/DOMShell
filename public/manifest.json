@@ -9,7 +9,8 @@
     "activeTab",
     "cookies",
     "identity",
-    "storage"
+    "storage",
+    "alarms"
   ],
   "minimum_chrome_version": "116",
   "host_permissions": ["<all_urls>"],
@@ -19,6 +20,10 @@
   },
   "side_panel": {
     "default_path": "src/sidepanel/index.html"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": false
   },
   "action": {
     "default_title": "AgentShell"

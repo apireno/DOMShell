@@ -9,10 +9,18 @@ export default defineConfig({
     {
       name: "chrome-extension-post-build",
       closeBundle() {
-        // Copy manifest.json into dist
+        // Copy manifest.json and options.html into dist
         copyFileSync(
           resolve(__dirname, "public/manifest.json"),
           resolve(__dirname, "dist/manifest.json")
+        );
+        copyFileSync(
+          resolve(__dirname, "public/options.html"),
+          resolve(__dirname, "dist/options.html")
+        );
+        copyFileSync(
+          resolve(__dirname, "public/options.js"),
+          resolve(__dirname, "dist/options.js")
         );
       },
     },

@@ -36,9 +36,23 @@ export type ShellMessage = StdinMessage | StdoutMessage | StderrMessage | ReadyM
 // ---- Shell State ----
 
 export interface ShellState {
-  cwd: string[];          // Path of AXNode IDs, e.g. ["root", "nav", "profile"]
-  cwdNames: string[];     // Human-readable path, e.g. ["/", "navigation", "profile_link"]
-  attachedTabId: number | null;
+  // Unified path from browser root (~). Examples:
+  //   []                              → ~ (browser root)
+  //   ["tabs"]                        → ~/tabs
+  //   ["tabs", "123"]                 → inside tab 123, at DOM root
+  //   ["tabs", "123", "main", "form"] → inside tab 123, at /main/form
+  //   ["windows"]                     → window listing
+  //   ["windows", "1"]               → window 1's tabs
+  //   ["windows", "1", "123", "nav"] → inside tab 123 via window 1, at /nav
+  path: string[];
+
+  // AX node IDs for the DOM portion of path (parallel to segments after tab entry).
+  // If path = ["tabs", "123", "main", "form"], axNodeIds = [rootId, mainId, formId]
+  axNodeIds: string[];
+
+  // Which tab's AX tree is currently cached in nodeMap (null = none)
+  activeTabId: number | null;
+
   env: Record<string, string>;
 }
 

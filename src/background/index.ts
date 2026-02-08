@@ -14,9 +14,9 @@ import { INTERACTIVE_ROLES } from "../shared/types.ts";
 const cdp = new CDPClient();
 
 const state: ShellState = {
-  cwd: [],
-  cwdNames: ["/"],
-  attachedTabId: null,
+  path: [],                // Start at browser root (~)
+  axNodeIds: [],           // No DOM context yet
+  activeTabId: null,       // No tab attached yet
   env: {
     SHELL: "/bin/agentshell",
     TERM: "xterm-256color",
@@ -27,6 +27,118 @@ const state: ShellState = {
 let nodeMap: Map<string, AXNode> = new Map();
 let treeStale = false;
 
+// ---- Path Helpers ----
+
+/** Extract tab ID from unified path, or null if not inside a tab. */
+function getTabIdFromPath(path: string[]): number | null {
+  // ["tabs", "<id>", ...] → id at index 1
+  if (path[0] === "tabs" && path.length >= 2) {
+    const n = parseInt(path[1], 10);
+    return isNaN(n) ? null : n;
+  }
+  // ["windows", "<winId>", "<tabId>", ...] → id at index 2
+  if (path[0] === "windows" && path.length >= 3) {
+    const n = parseInt(path[2], 10);
+    return isNaN(n) ? null : n;
+  }
+  return null;
+}
+
+/** Index in path where DOM segments start (after the tab entry segment). */
+function getDomStartIndex(path: string[]): number {
+  if (path[0] === "tabs" && path.length >= 2) return 2;
+  if (path[0] === "windows" && path.length >= 3) return 3;
+  return -1;
+}
+
+/** Are we currently inside a tab's DOM? */
+function isInsideTab(): boolean {
+  return getTabIdFromPath(state.path) !== null;
+}
+
+/** Guard: throws if not inside a tab. Replaces old ensureAttached(). */
+function ensureInsideTab(): void {
+  if (!isInsideTab()) {
+    throw new Error("This command requires a tab context. Use 'cd tabs/<id>' to enter a tab, or 'open <url>' to open one.");
+  }
+  if (!state.activeTabId || nodeMap.size === 0) {
+    throw new Error("Tab context lost. Navigate to a tab with 'cd tabs/<id>'.");
+  }
+}
+
+/** Get the current AX node ID (last in axNodeIds). */
+function getCurrentNodeId(): string {
+  if (state.axNodeIds.length === 0) throw new Error("No DOM context. Navigate into a tab first.");
+  return state.axNodeIds[state.axNodeIds.length - 1];
+}
+
+/** Get DOM segment names from current path (everything after tab entry). */
+function getDomSegments(): string[] {
+  const start = getDomStartIndex(state.path);
+  if (start < 0) return [];
+  return state.path.slice(start);
+}
+
+/** Internal: attach CDP to a tab and build its AX tree. */
+async function cdpSwitchToTab(tabId: number): Promise<{ tab: chrome.tabs.Tab; nodeCount: number; iframeCount: number }> {
+  if (state.activeTabId === tabId && nodeMap.size > 0) {
+    // Already attached — just return info
+    const tab = await chrome.tabs.get(tabId);
+    let iframeCount = 0;
+    for (const node of nodeMap.values()) {
+      const r = node.role?.value ?? "";
+      if (r === "Iframe" || r === "IframePresentational") iframeCount++;
+    }
+    return { tab, nodeCount: nodeMap.size, iframeCount };
+  }
+
+  // Attach (CDPClient auto-detaches the previous tab)
+  await cdp.attach(tabId);
+  state.activeTabId = tabId;
+
+  const axNodes = await cdp.getAllFrameAXTrees();
+  nodeMap = buildNodeMap(axNodes);
+
+  const root = findRootNode(nodeMap);
+  state.axNodeIds = root ? [root.nodeId] : [];
+
+  const tab = await chrome.tabs.get(tabId);
+  let iframeCount = 0;
+  for (const node of nodeMap.values()) {
+    const r = node.role?.value ?? "";
+    if (r === "Iframe" || r === "IframePresentational") iframeCount++;
+  }
+  return { tab, nodeCount: nodeMap.size, iframeCount };
+}
+
+/** Resolve a tab target (numeric ID or substring match) to a chrome.tabs.Tab. */
+async function resolveTabTarget(target: string): Promise<chrome.tabs.Tab> {
+  // Numeric = exact tab ID
+  if (/^\d+$/.test(target)) {
+    const tabId = parseInt(target, 10);
+    try {
+      return await chrome.tabs.get(tabId);
+    } catch {
+      throw new Error(`Tab ${tabId} not found. Use 'tabs' to list all tabs.`);
+    }
+  }
+
+  // Substring match on title/URL
+  const pattern = target.toLowerCase();
+  const allWindows = await chrome.windows.getAll({ populate: true });
+  for (const win of allWindows) {
+    for (const t of win.tabs ?? []) {
+      if (
+        t.title?.toLowerCase().includes(pattern) ||
+        t.url?.toLowerCase().includes(pattern)
+      ) {
+        return t;
+      }
+    }
+  }
+  throw new Error(`No tab matching '${target}'. Use 'tabs' to list all tabs.`);
+}
+
 // ---- WebSocket Bridge (for MCP server) ----
 // Default OFF — user must explicitly run `connect <token>` to enable
 
@@ -35,22 +147,31 @@ let wsToken: string | null = null;
 let wsReconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let wsHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
 let wsPort = 9876;
+let wsEnabled = false;
 let wsConnected = false;
 let wsAllowedDomains: string[] = [];
+
+function setWsStatus(status: "disabled" | "connecting" | "connected" | "disconnected"): void {
+  chrome.storage.local.set({ ws_status: status });
+}
 
 function stripAnsi(str: string): string {
   return str.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
 }
 
 function wsConnect(): void {
-  if (!wsToken) return;
+  if (!wsToken || !wsEnabled) return;
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+
+  setWsStatus("connecting");
 
   try {
     ws = new WebSocket(`ws://127.0.0.1:${wsPort}?token=${wsToken}`);
 
     ws.onopen = () => {
       wsConnected = true;
+      setWsStatus("connected");
+      startKeepaliveAlarm();
       console.log("[AgentShell] WebSocket connected to MCP server");
 
       // Start heartbeat to keep MV3 service worker alive
@@ -68,7 +189,7 @@ function wsConnect(): void {
 
         if (msg.type === "EXECUTE" && msg.command) {
           // Domain allowlist check
-          if (msg.allowedDomains && msg.allowedDomains.length > 0 && state.attachedTabId) {
+          if (msg.allowedDomains && msg.allowedDomains.length > 0 && state.activeTabId) {
             try {
               const url = await cdp.getPageUrl();
               const hostname = new URL(url).hostname.toLowerCase();
@@ -110,12 +231,16 @@ function wsConnect(): void {
         wsHeartbeatTimer = null;
       }
 
-      // Auto-reconnect after 5s if token is still set
-      if (wsToken && !wsReconnectTimer) {
+      // Auto-reconnect after 5s if still enabled with token
+      if (wsEnabled && wsToken && !wsReconnectTimer) {
+        setWsStatus("disconnected");
         wsReconnectTimer = setTimeout(() => {
           wsReconnectTimer = null;
           wsConnect();
         }, 5000);
+      } else if (!wsEnabled) {
+        stopKeepaliveAlarm();
+        setWsStatus("disabled");
       }
     };
 
@@ -134,7 +259,7 @@ function wsConnect(): void {
 }
 
 function wsDisconnect(): void {
-  wsToken = null;
+  wsEnabled = false;
   wsConnected = false;
 
   if (wsReconnectTimer) {
@@ -150,15 +275,81 @@ function wsDisconnect(): void {
     ws = null;
   }
 
-  // Clear stored token
-  chrome.storage.local.remove("ws_token");
+  stopKeepaliveAlarm();
+  setWsStatus("disabled");
 }
 
+// ---- Alarm-based keepalive for MV3 service worker ----
+// chrome.alarms survive worker suspension and wake the worker when they fire.
+
+const KEEPALIVE_ALARM = "agentshell-keepalive";
+
+function startKeepaliveAlarm(): void {
+  chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.4 });
+}
+
+function stopKeepaliveAlarm(): void {
+  chrome.alarms.clear(KEEPALIVE_ALARM);
+}
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== KEEPALIVE_ALARM) return;
+
+  // The mere act of this listener firing wakes the service worker.
+  if (ws?.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: "pong" }));
+  }
+
+  // If we should be connected but aren't, trigger reconnect
+  if (wsEnabled && wsToken && (!ws || ws.readyState !== WebSocket.OPEN) && !wsReconnectTimer) {
+    wsConnect();
+  }
+});
+
 // Restore WebSocket connection on service worker restart
-chrome.storage.local.get(["ws_token", "ws_port"], (result) => {
-  if (result.ws_token) {
-    wsToken = result.ws_token;
-    wsPort = result.ws_port || 9876;
+chrome.storage.local.get(["ws_enabled", "ws_token", "ws_port"], (result) => {
+  wsEnabled = result.ws_enabled === true;
+  wsToken = (result.ws_token as string) || null;
+  wsPort = (result.ws_port as number) || 9876;
+
+  if (wsEnabled && wsToken) {
+    startKeepaliveAlarm(); // Keep worker alive during reconnect attempt
+    wsConnect();
+  } else {
+    stopKeepaliveAlarm();
+    setWsStatus(wsEnabled ? "disconnected" : "disabled");
+  }
+});
+
+// React to settings changes from the options page
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local") return;
+
+  const enabledChanged = "ws_enabled" in changes;
+  const tokenChanged = "ws_token" in changes;
+  const portChanged = "ws_port" in changes;
+
+  if (!enabledChanged && !tokenChanged && !portChanged) return;
+
+  if (enabledChanged) wsEnabled = changes.ws_enabled.newValue === true;
+  if (tokenChanged) wsToken = (changes.ws_token.newValue as string) || null;
+  if (portChanged) wsPort = (changes.ws_port.newValue as number) || 9876;
+
+  if (!wsEnabled) {
+    // Disable: close connection but keep token/port in memory
+    wsConnected = false;
+    if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
+    if (wsHeartbeatTimer) { clearInterval(wsHeartbeatTimer); wsHeartbeatTimer = null; }
+    if (ws) { ws.close(); ws = null; }
+    setWsStatus("disabled");
+    return;
+  }
+
+  // Enabled (or token/port changed while enabled): reconnect
+  if (wsToken) {
+    if (ws) { ws.close(); ws = null; }
+    wsConnected = false;
+    if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
     wsConnect();
   }
 });
@@ -166,7 +357,7 @@ chrome.storage.local.get(["ws_token", "ws_port"], (result) => {
 // ---- CDP Event Listener for DOM / Navigation Changes ----
 
 chrome.debugger.onEvent.addListener((source, method) => {
-  if (source.tabId !== state.attachedTabId) return;
+  if (source.tabId !== state.activeTabId) return;
 
   if (
     method === "Page.frameNavigated" ||
@@ -208,14 +399,14 @@ chrome.runtime.onConnect.addListener((port) => {
 
 function formatWelcome(): string {
   return [
-    "\x1b[36m╔══════════════════════════════════════════════════════╗\x1b[0m",
-    "\x1b[36m║\x1b[0m   \x1b[1;33mAgentShell v1.0.0\x1b[0m                                 \x1b[36m║\x1b[0m",
-    "\x1b[36m║\x1b[0m   \x1b[37mThe DOM is your filesystem.\x1b[0m                        \x1b[36m║\x1b[0m",
-    "\x1b[36m║\x1b[0m   \x1b[90mhttps://github.com/apireno/AgenticShell\x1b[0m            \x1b[36m║\x1b[0m",
-    "\x1b[36m╚══════════════════════════════════════════════════════╝\x1b[0m",
+    "\x1b[36m\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557\x1b[0m",
+    "\x1b[36m\u2551\x1b[0m   \x1b[1;33mAgentShell v1.0.0\x1b[0m                                 \x1b[36m\u2551\x1b[0m",
+    "\x1b[36m\u2551\x1b[0m   \x1b[37mThe browser is your filesystem.\x1b[0m                    \x1b[36m\u2551\x1b[0m",
+    "\x1b[36m\u2551\x1b[0m   \x1b[90mhttps://github.com/apireno/AgenticShell\x1b[0m            \x1b[36m\u2551\x1b[0m",
+    "\x1b[36m\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d\x1b[0m",
     "",
     "\x1b[90mType 'help' to see available commands.\x1b[0m",
-    "\x1b[90mType 'attach' to connect to the active tab.\x1b[0m",
+    "\x1b[90mType 'tabs' to see open browser tabs, then 'cd tabs/<id>' to enter one.\x1b[0m",
     "",
   ].join("\r\n");
 }
@@ -225,14 +416,11 @@ function formatWelcome(): string {
 
 function typePrefix(node: VFSNode): string {
   if (node.isDirectory) {
-    // Directory that also has interactive children
     return "[d]";
   }
   if (INTERACTIVE_ROLES.has(node.role)) {
-    // Clickable / interactive file
     return "[x]";
   }
-  // Static / read-only node
   return "[-]";
 }
 
@@ -240,37 +428,43 @@ function typePrefix(node: VFSNode): string {
 
 const COMMAND_HELP: Record<string, string> = {
   help: [
-    "\x1b[1;36mhelp\x1b[0m — Show all available commands",
+    "\x1b[1;36mhelp\x1b[0m \u2014 Show all available commands",
     "",
     "\x1b[33mUsage:\x1b[0m help",
   ].join("\r\n"),
 
-  attach: [
-    "\x1b[1;36mattach\x1b[0m — Connect to the active browser tab via CDP",
+  tabs: [
+    "\x1b[1;36mtabs\x1b[0m \u2014 List all open browser tabs",
     "",
-    "\x1b[33mUsage:\x1b[0m attach",
+    "\x1b[33mUsage:\x1b[0m tabs",
     "",
-    "Attaches the Chrome DevTools Protocol debugger to the active tab,",
-    "fetches its Accessibility Tree (including iframes), and sets CWD to root.",
+    "Shows all tabs across all windows with their IDs, titles, and URLs.",
+    "Use 'cd tabs/<id>' to switch to a specific tab.",
+    "",
+    "\x1b[33mEquivalent to:\x1b[0m ls ~/tabs/",
   ].join("\r\n"),
 
-  detach: [
-    "\x1b[1;36mdetach\x1b[0m — Disconnect from the current tab",
+  windows: [
+    "\x1b[1;36mwindows\x1b[0m \u2014 List all browser windows",
     "",
-    "\x1b[33mUsage:\x1b[0m detach",
+    "\x1b[33mUsage:\x1b[0m windows",
+    "",
+    "Shows all Chrome windows with their IDs and tab counts.",
+    "",
+    "\x1b[33mEquivalent to:\x1b[0m ls ~/windows/",
   ].join("\r\n"),
 
   refresh: [
-    "\x1b[1;36mrefresh\x1b[0m — Re-fetch the Accessibility Tree",
+    "\x1b[1;36mrefresh\x1b[0m \u2014 Re-fetch the Accessibility Tree",
     "",
     "\x1b[33mUsage:\x1b[0m refresh",
     "",
-    "Re-fetches the full AX tree (including iframes) and resets CWD to root.",
+    "Re-fetches the full AX tree (including iframes) and resets to DOM root.",
     "Use after page navigation or DOM mutations.",
   ].join("\r\n"),
 
   ls: [
-    "\x1b[1;36mls\x1b[0m — List children of the current node",
+    "\x1b[1;36mls\x1b[0m \u2014 List children of the current node",
     "",
     "\x1b[33mUsage:\x1b[0m ls [options]",
     "",
@@ -288,60 +482,83 @@ const COMMAND_HELP: Record<string, string> = {
     "  [-]  Static (read-only: heading, image, text, etc.)",
     "",
     "\x1b[33mColor Legend:\x1b[0m",
-    "  \x1b[1;34m■ Blue\x1b[0m     Directories   \x1b[1;32m■ Green\x1b[0m   Buttons",
-    "  \x1b[1;35m■ Magenta\x1b[0m  Links         \x1b[1;33m■ Yellow\x1b[0m  Inputs/search",
-    "  \x1b[1;36m■ Cyan\x1b[0m     Checkboxes    \x1b[37m■ White\x1b[0m   Other",
+    "  \x1b[1;34m\u25a0 Blue\x1b[0m     Directories   \x1b[1;32m\u25a0 Green\x1b[0m   Buttons",
+    "  \x1b[1;35m\u25a0 Magenta\x1b[0m  Links         \x1b[1;33m\u25a0 Yellow\x1b[0m  Inputs/search",
+    "  \x1b[1;36m\u25a0 Cyan\x1b[0m     Checkboxes    \x1b[37m\u25a0 White\x1b[0m   Other",
     "",
-    "\x1b[33mExamples:\x1b[0m",
-    "  ls                     List all children",
-    "  ls -l                  Long format with roles + type prefixes",
-    "  ls -n 10               First 10 items",
-    "  ls -n 10 --offset 10   Items 11-20 (pagination)",
-    "  ls --type link         Only show links",
-    "  ls -l --type button    Buttons only, long format",
-    "  ls --count             Just show the count",
+    "At browser level (~), ls shows windows/ and tabs/ directories.",
+    "Inside a tab, ls shows the DOM's Accessibility Tree children.",
   ].join("\r\n"),
 
   cd: [
-    "\x1b[1;36mcd\x1b[0m — Change directory (navigate into a container node)",
+    "\x1b[1;36mcd\x1b[0m \u2014 Change directory (unified browser + DOM hierarchy)",
     "",
     "\x1b[33mUsage:\x1b[0m cd [path]",
     "",
-    "\x1b[33mExamples:\x1b[0m",
-    "  cd navigation    Enter the 'navigation' container",
-    "  cd ..            Go up one level",
-    "  cd /             Go to root",
-    "  cd main/form     Multi-level path",
-    "  cd ../sidebar    Go up then into 'sidebar'",
+    "\x1b[33mBrowser paths:\x1b[0m",
+    "  cd ~ or cd /     Go to browser root",
+    "  cd tabs           Enter the tabs listing",
+    "  cd tabs/123       Enter tab 123 (transparent CDP attach)",
+    "  cd tabs/github    Switch to first tab matching 'github'",
+    "  cd windows        Enter the windows listing",
+    "  cd windows/1      Enter window 1's tab listing",
+    "",
+    "\x1b[33mDOM paths (inside a tab):\x1b[0m",
+    "  cd navigation     Enter the 'navigation' container",
+    "  cd ..              Go up one level (from DOM root exits to browser level)",
+    "  cd main/form      Multi-level path",
+    "  cd ../sidebar     Go up then into 'sidebar'",
+    "  cd ../456         Switch from one tab to a sibling tab",
   ].join("\r\n"),
 
   pwd: [
-    "\x1b[1;36mpwd\x1b[0m — Print working directory (current path in the AX tree)",
+    "\x1b[1;36mpwd\x1b[0m \u2014 Print working directory (unified path)",
     "",
     "\x1b[33mUsage:\x1b[0m pwd",
+    "",
+    "Shows the full path from browser root, e.g. ~/tabs/123/main/form",
   ].join("\r\n"),
 
   cat: [
-    "\x1b[1;36mcat\x1b[0m — Read metadata and text content of a node",
+    "\x1b[1;36mcat\x1b[0m \u2014 Read metadata and text content of a node",
     "",
     "\x1b[33mUsage:\x1b[0m cat <name>",
     "",
     "Shows: role, type ([d]/[x]/[-]), AX ID, DOM backend ID,",
     "value, child count (dirs), and DOM text content.",
+    "",
+    "Requires a tab context (cd into a tab first).",
+  ].join("\r\n"),
+
+  text: [
+    "\x1b[1;36mtext\x1b[0m \u2014 Bulk extract text content from a node and its descendants",
+    "",
+    "\x1b[33mUsage:\x1b[0m text [name] [-n N]",
+    "",
+    "\x1b[33mArguments:\x1b[0m",
+    "  name         Extract text from a specific child (default: current directory)",
+    "  -n N         Limit output to first N characters",
+    "",
+    "Uses the DOM's textContent property, which returns all descendant text",
+    "in a single call. Much faster than calling 'cat' on each element.",
+    "",
+    "\x1b[33mExamples:\x1b[0m",
+    "  text                    All text from current directory",
+    "  text main               All text from the 'main' child",
+    "  text article -n 2000    First 2000 chars from 'article'",
   ].join("\r\n"),
 
   click: [
-    "\x1b[1;36mclick\x1b[0m — Click an element",
+    "\x1b[1;36mclick\x1b[0m \u2014 Click an element",
     "",
     "\x1b[33mUsage:\x1b[0m click <name>",
     "",
     "Resolves the node to a DOM element and triggers a click.",
     "Falls back to coordinate-based click if JS click fails.",
-    "Use 'refresh' after clicking if the page changes.",
   ].join("\r\n"),
 
   focus: [
-    "\x1b[1;36mfocus\x1b[0m — Focus an input element",
+    "\x1b[1;36mfocus\x1b[0m \u2014 Focus an input element",
     "",
     "\x1b[33mUsage:\x1b[0m focus <name>",
     "",
@@ -349,7 +566,7 @@ const COMMAND_HELP: Record<string, string> = {
   ].join("\r\n"),
 
   type: [
-    "\x1b[1;36mtype\x1b[0m — Type text into the focused element",
+    "\x1b[1;36mtype\x1b[0m \u2014 Type text into the focused element",
     "",
     "\x1b[33mUsage:\x1b[0m type <text>",
     "",
@@ -362,7 +579,7 @@ const COMMAND_HELP: Record<string, string> = {
   ].join("\r\n"),
 
   grep: [
-    "\x1b[1;36mgrep\x1b[0m — Search children for matching names",
+    "\x1b[1;36mgrep\x1b[0m \u2014 Search children for matching names",
     "",
     "\x1b[33mUsage:\x1b[0m grep [options] <pattern>",
     "",
@@ -371,15 +588,10 @@ const COMMAND_HELP: Record<string, string> = {
     "  \x1b[32m-n N\x1b[0m             Limit results to first N matches",
     "",
     "Matches against name, role, and value. Case-insensitive.",
-    "",
-    "\x1b[33mExamples:\x1b[0m",
-    "  grep login         Current dir only",
-    "  grep -r search     Recursive search",
-    "  grep -r -n 5 btn   First 5 recursive matches",
   ].join("\r\n"),
 
   find: [
-    "\x1b[1;36mfind\x1b[0m — Deep recursive search with full paths",
+    "\x1b[1;36mfind\x1b[0m \u2014 Deep recursive search with full paths",
     "",
     "\x1b[33mUsage:\x1b[0m find [options] <pattern>",
     "",
@@ -388,29 +600,19 @@ const COMMAND_HELP: Record<string, string> = {
     "  \x1b[32m-n N\x1b[0m          Limit to first N results",
     "",
     "Searches the entire tree from CWD down. Shows the full path.",
-    "",
-    "\x1b[33mExamples:\x1b[0m",
-    "  find search           Anything with 'search' in the name",
-    "  find --type combobox  All dropdowns / comboboxes",
-    "  find --type textbox   All text input fields",
-    "  find --type link -n 5 First 5 links",
   ].join("\r\n"),
 
   tree: [
-    "\x1b[1;36mtree\x1b[0m — Show a tree view of the current node",
+    "\x1b[1;36mtree\x1b[0m \u2014 Show a tree view of the current node",
     "",
     "\x1b[33mUsage:\x1b[0m tree [depth]",
     "",
     "\x1b[33mArguments:\x1b[0m",
     "  depth    Max depth to display (default: 2)",
-    "",
-    "\x1b[33mExamples:\x1b[0m",
-    "  tree       2-level deep tree",
-    "  tree 5     5-level deep tree",
   ].join("\r\n"),
 
   whoami: [
-    "\x1b[1;36mwhoami\x1b[0m — Check authentication status via cookies",
+    "\x1b[1;36mwhoami\x1b[0m \u2014 Check authentication status via cookies",
     "",
     "\x1b[33mUsage:\x1b[0m whoami",
     "",
@@ -418,13 +620,13 @@ const COMMAND_HELP: Record<string, string> = {
   ].join("\r\n"),
 
   env: [
-    "\x1b[1;36menv\x1b[0m — Show environment variables",
+    "\x1b[1;36menv\x1b[0m \u2014 Show environment variables",
     "",
     "\x1b[33mUsage:\x1b[0m env",
   ].join("\r\n"),
 
   export: [
-    "\x1b[1;36mexport\x1b[0m — Set an environment variable",
+    "\x1b[1;36mexport\x1b[0m \u2014 Set an environment variable",
     "",
     "\x1b[33mUsage:\x1b[0m export KEY=VALUE",
     "",
@@ -434,7 +636,7 @@ const COMMAND_HELP: Record<string, string> = {
   ].join("\r\n"),
 
   debug: [
-    "\x1b[1;36mdebug\x1b[0m — Inspect raw AX tree data",
+    "\x1b[1;36mdebug\x1b[0m \u2014 Inspect raw AX tree data",
     "",
     "\x1b[33mSubcommands:\x1b[0m",
     "  \x1b[32mstats\x1b[0m          AX tree statistics",
@@ -443,13 +645,47 @@ const COMMAND_HELP: Record<string, string> = {
   ].join("\r\n"),
 
   clear: [
-    "\x1b[1;36mclear\x1b[0m — Clear the terminal screen",
+    "\x1b[1;36mclear\x1b[0m \u2014 Clear the terminal screen",
     "",
     "\x1b[33mUsage:\x1b[0m clear",
   ].join("\r\n"),
 
+  navigate: [
+    "\x1b[1;36mnavigate\x1b[0m \u2014 Navigate the current tab to a URL",
+    "",
+    "\x1b[33mUsage:\x1b[0m navigate <url>",
+    "",
+    "Navigates the tab you're currently inside to the given URL.",
+    "Requires a tab context (cd into a tab first).",
+    "Automatically re-fetches the AX tree after loading.",
+    "",
+    "\x1b[33mAlias:\x1b[0m goto",
+    "",
+    "\x1b[33mExamples:\x1b[0m",
+    "  navigate https://google.com",
+    "  goto https://github.com",
+  ].join("\r\n"),
+
+  goto: [
+    "\x1b[1;36mgoto\x1b[0m \u2014 Alias for navigate. See navigate --help.",
+  ].join("\r\n"),
+
+  open: [
+    "\x1b[1;36mopen\x1b[0m \u2014 Open a new tab and enter it",
+    "",
+    "\x1b[33mUsage:\x1b[0m open <url>",
+    "",
+    "Creates a new tab with the given URL, waits for it to load,",
+    "then enters it (path becomes ~/tabs/<id>).",
+    "Works from any location in the hierarchy.",
+    "",
+    "\x1b[33mExamples:\x1b[0m",
+    "  open https://google.com",
+    "  open https://github.com/apireno/AgenticShell",
+  ].join("\r\n"),
+
   connect: [
-    "\x1b[1;36mconnect\x1b[0m — Connect to an AgentShell MCP server via WebSocket",
+    "\x1b[1;36mconnect\x1b[0m \u2014 Connect to an AgentShell MCP server via WebSocket",
     "",
     "\x1b[33mUsage:\x1b[0m connect <token>",
     "",
@@ -464,14 +700,14 @@ const COMMAND_HELP: Record<string, string> = {
     "\x1b[33mOptions:\x1b[0m",
     "  \x1b[32m--port N\x1b[0m   Connect to a custom port (default: 9876)",
     "",
-    "\x1b[1;31m⚠ Security Warning:\x1b[0m",
+    "\x1b[1;31m\u26a0 Security Warning:\x1b[0m",
     "  This gives the MCP server (and any connected AI) access to",
     "  execute commands in your browser. Only connect to MCP servers",
     "  you trust and have started yourself.",
   ].join("\r\n"),
 
   disconnect: [
-    "\x1b[1;36mdisconnect\x1b[0m — Disconnect from the MCP server",
+    "\x1b[1;36mdisconnect\x1b[0m \u2014 Disconnect from the MCP server",
     "",
     "\x1b[33mUsage:\x1b[0m disconnect",
     "",
@@ -535,10 +771,10 @@ async function executeCommand(raw: string): Promise<string> {
     switch (cmd) {
       case "help":
         return handleHelp();
-      case "attach":
-        return await handleAttach();
-      case "detach":
-        return await handleDetach();
+      case "tabs":
+        return await handleTabs();
+      case "windows":
+        return await handleWindows();
       case "ls":
         return await handleLs(args);
       case "cd":
@@ -547,6 +783,8 @@ async function executeCommand(raw: string): Promise<string> {
         return handlePwd();
       case "cat":
         return await handleCat(args);
+      case "text":
+        return await handleText(args);
       case "click":
         return await handleClick(args);
       case "type":
@@ -569,6 +807,11 @@ async function executeCommand(raw: string): Promise<string> {
         return await handleRefresh();
       case "debug":
         return await handleDebug(args);
+      case "navigate":
+      case "goto":
+        return await handleNavigate(args);
+      case "open":
+        return await handleOpen(args);
       case "connect":
         return handleConnect(args);
       case "disconnect":
@@ -614,21 +857,28 @@ function parseCommandLine(input: string): string[] {
 
 function handleHelp(): string {
   return [
-    "\x1b[1;36mAgentShell — DOM as a Filesystem\x1b[0m",
+    "\x1b[1;36mAgentShell \u2014 The browser is your filesystem\x1b[0m",
     "",
     "Use \x1b[33m<command> --help\x1b[0m for detailed usage of any command.",
     "",
+    "\x1b[1;33mBrowser:\x1b[0m",
+    "  \x1b[32mtabs\x1b[0m            List all open browser tabs",
+    "  \x1b[32mwindows\x1b[0m         List all browser windows",
+    "  \x1b[32mcd tabs/<id>\x1b[0m    Enter a tab (by ID or name pattern)",
+    "  \x1b[32mcd ~\x1b[0m or \x1b[32mcd /\x1b[0m    Go to browser root",
+    "",
     "\x1b[1;33mNavigation:\x1b[0m",
-    "  \x1b[32mattach\x1b[0m          Connect to the active browser tab",
-    "  \x1b[32mdetach\x1b[0m          Disconnect from the current tab",
+    "  \x1b[32mnavigate <url>\x1b[0m  Navigate the current tab to a URL",
+    "  \x1b[32mopen <url>\x1b[0m      Open a new tab and enter it",
     "  \x1b[32mrefresh\x1b[0m         Re-fetch the Accessibility Tree",
-    "  \x1b[32mls\x1b[0m              List children of the current node",
-    "  \x1b[32mcd <name>\x1b[0m       Enter a child node (directory)",
+    "  \x1b[32mls\x1b[0m              List children (tabs/windows at ~ or DOM elements)",
+    "  \x1b[32mcd <name>\x1b[0m       Enter a child node",
     "  \x1b[32mpwd\x1b[0m             Show current path",
     "  \x1b[32mtree [depth]\x1b[0m    Show tree view of current node",
     "",
     "\x1b[1;33mInspection:\x1b[0m",
     "  \x1b[32mcat <name>\x1b[0m      Read metadata and text content of a node",
+    "  \x1b[32mtext [name]\x1b[0m     Bulk extract text from a node and descendants",
     "  \x1b[32mgrep <pattern>\x1b[0m  Search children for matching names",
     "  \x1b[32mfind <pattern>\x1b[0m  Deep recursive search across the tree",
     "",
@@ -655,87 +905,24 @@ function handleHelp(): string {
   ].join("\r\n");
 }
 
-async function handleAttach(): Promise<string> {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab?.id) return "\x1b[31mError: No active tab found.\x1b[0m";
-
-  try {
-    await cdp.attach(tab.id);
-    state.attachedTabId = tab.id;
-
-    // Fetch AX tree including iframes
-    const axNodes = await cdp.getAllFrameAXTrees();
-    nodeMap = buildNodeMap(axNodes);
-
-    const root = findRootNode(nodeMap);
-    if (root) {
-      state.cwd = [root.nodeId];
-      state.cwdNames = ["/"];
-    }
-
-    const title = tab.title ?? "unknown";
-    const url = tab.url ?? "unknown";
-
-    let iframeCount = 0;
-    for (const node of nodeMap.values()) {
-      const role = node.role?.value ?? "";
-      if (role === "Iframe" || role === "IframePresentational") iframeCount++;
-    }
-
-    const lines = [
-      `\x1b[32m✓ Attached to tab ${tab.id}\x1b[0m`,
-      `  \x1b[37mTitle: ${title}\x1b[0m`,
-      `  \x1b[37mURL:   ${url}\x1b[0m`,
-      `  \x1b[90mAX Nodes: ${nodeMap.size}\x1b[0m`,
-    ];
-    if (iframeCount > 0) {
-      lines.push(`  \x1b[90mIframes: ${iframeCount}\x1b[0m`);
-    }
-    lines.push("");
-    return lines.join("\r\n");
-  } catch (err: any) {
-    return `\x1b[31mError attaching: ${err.message}\x1b[0m`;
-  }
-}
-
-async function handleDetach(): Promise<string> {
-  if (!state.attachedTabId) {
-    return "\x1b[33mNot attached to any tab.\x1b[0m";
-  }
-  await cdp.detach();
-  state.attachedTabId = null;
-  state.cwd = [];
-  state.cwdNames = ["/"];
-  nodeMap.clear();
-  return "\x1b[32m✓ Detached.\x1b[0m";
-}
+// ---- refresh ----
 
 async function handleRefresh(): Promise<string> {
-  if (!state.attachedTabId) {
-    return "\x1b[31mNot attached. Run 'attach' first.\x1b[0m";
-  }
+  ensureInsideTab();
 
   const axNodes = await cdp.getAllFrameAXTrees();
   nodeMap = buildNodeMap(axNodes);
 
   const root = findRootNode(nodeMap);
-  if (root) {
-    state.cwd = [root.nodeId];
-    state.cwdNames = ["/"];
+
+  // Reset DOM portion of path to root
+  const domStart = getDomStartIndex(state.path);
+  if (domStart >= 0) {
+    state.path = state.path.slice(0, domStart);
   }
+  state.axNodeIds = root ? [root.nodeId] : [];
 
-  return `\x1b[32m✓ Refreshed. ${nodeMap.size} AX nodes loaded.\x1b[0m`;
-}
-
-function ensureAttached(): void {
-  if (!state.attachedTabId || nodeMap.size === 0) {
-    throw new Error("Not attached to a tab. Run 'attach' first.");
-  }
-}
-
-function getCurrentNodeId(): string {
-  if (state.cwd.length === 0) throw new Error("No CWD set. Run 'attach' first.");
-  return state.cwd[state.cwd.length - 1];
+  return `\x1b[32m\u2713 Refreshed. ${nodeMap.size} AX nodes loaded.\x1b[0m`;
 }
 
 /**
@@ -750,16 +937,17 @@ async function ensureFreshTree(): Promise<string> {
   const axNodes = await cdp.getAllFrameAXTrees();
   nodeMap = buildNodeMap(axNodes);
 
-  // Check if current CWD still exists in the new tree
-  const currentId = state.cwd[state.cwd.length - 1];
+  // Check if current AX node still exists in the new tree
+  const currentId = state.axNodeIds[state.axNodeIds.length - 1];
   if (currentId && !nodeMap.has(currentId)) {
-    // CWD is gone — page navigated, reset to root
+    // CWD is gone — page navigated, reset DOM portion to root
     const root = findRootNode(nodeMap);
-    if (root) {
-      state.cwd = [root.nodeId];
-      state.cwdNames = ["/"];
+    const domStart = getDomStartIndex(state.path);
+    if (domStart >= 0) {
+      state.path = state.path.slice(0, domStart);
     }
-    return `\x1b[33m(page changed — tree refreshed, ${nodeMap.size} nodes, CWD reset to /)\x1b[0m\r\n`;
+    state.axNodeIds = root ? [root.nodeId] : [];
+    return `\x1b[33m(page changed \u2014 tree refreshed, ${nodeMap.size} nodes, path reset to tab root)\x1b[0m\r\n`;
   }
 
   return `\x1b[90m(tree auto-refreshed, ${nodeMap.size} nodes)\x1b[0m\r\n`;
@@ -768,9 +956,9 @@ async function ensureFreshTree(): Promise<string> {
 // ---- Tab Completion ----
 
 const COMMANDS = [
-  "help", "attach", "detach", "refresh", "ls", "cd", "pwd", "cat",
+  "help", "tabs", "windows", "refresh", "ls", "cd", "pwd", "cat",
   "click", "focus", "type", "grep", "find", "whoami", "env", "export",
-  "tree", "debug", "clear", "connect", "disconnect",
+  "tree", "debug", "clear", "navigate", "goto", "open", "connect", "disconnect", "text",
 ];
 
 function getCompletions(partial: string, command: string): string[] {
@@ -780,12 +968,23 @@ function getCompletions(partial: string, command: string): string[] {
     return COMMANDS.filter((c) => c.startsWith(lower));
   }
 
+  // For cd at browser level, complete browser-level names
+  if (command === "cd" && !isInsideTab()) {
+    const lower = partial.toLowerCase();
+    if (state.path.length === 0) {
+      // At ~: complete "tabs" or "windows"
+      return ["tabs/", "windows/"].filter((c) => c.toLowerCase().startsWith(lower));
+    }
+    // At ~/tabs or ~/windows/<id>: could complete tab IDs but too dynamic
+    return [];
+  }
+
   // For commands that take node names, complete against current directory children
-  const nodeCommands = new Set(["cd", "cat", "click", "focus", "ls", "grep", "find"]);
+  const nodeCommands = new Set(["cd", "cat", "click", "focus", "ls", "grep", "find", "text"]);
   if (!nodeCommands.has(command)) return [];
 
   try {
-    if (!state.attachedTabId || nodeMap.size === 0) return [];
+    if (!state.activeTabId || nodeMap.size === 0 || !isInsideTab()) return [];
     const currentId = getCurrentNodeId();
     const children = getChildVFSNodes(currentId, nodeMap);
 
@@ -806,10 +1005,30 @@ function getCompletions(partial: string, command: string): string[] {
 // ---- ls ----
 
 async function handleLs(args: string[]): Promise<string> {
-  ensureAttached();
+  const pa = parseArgs(args);
+
+  // Check for explicit ~ path argument
+  if (pa.positional.length > 0 && pa.positional[0].startsWith("~")) {
+    const afterTilde = pa.positional[0].slice(1).replace(/^\//, "");
+    const browserPath = afterTilde ? afterTilde.split("/").filter(Boolean) : [];
+    return await listBrowserLevel(browserPath);
+  }
+
+  // If not inside a tab, route to browser-level listing
+  if (!isInsideTab()) {
+    // Resolve relative browser-level paths
+    if (pa.positional.length > 0) {
+      const relPath = pa.positional[0].split("/").filter(Boolean);
+      const fullPath = [...state.path, ...relPath];
+      return await listBrowserLevel(fullPath);
+    }
+    return await listBrowserLevel(state.path);
+  }
+
+  // DOM-level listing
+  ensureInsideTab();
   const refreshMsg = await ensureFreshTree();
 
-  const pa = parseArgs(args);
   const longFormat = pa.flags.has("-l");
   const recursive = pa.flags.has("-r");
   const countOnly = pa.flags.has("--count");
@@ -889,6 +1108,94 @@ async function handleLs(args: string[]): Promise<string> {
   return refreshMsg + lines.join("\r\n");
 }
 
+async function listBrowserLevel(browserPath: string[]): Promise<string> {
+  const allWindows = await chrome.windows.getAll({ populate: true });
+
+  if (browserPath.length === 0) {
+    // Browser root: show windows/ and tabs/ directories
+    const totalTabs = allWindows.reduce((sum, w) => sum + (w.tabs?.length ?? 0), 0);
+    const lines = [
+      `  \x1b[1;34mwindows/\x1b[0m       \x1b[90m(${allWindows.length} windows)\x1b[0m`,
+      `  \x1b[1;34mtabs/\x1b[0m          \x1b[90m(${totalTabs} tabs)\x1b[0m`,
+    ];
+    if (state.activeTabId) {
+      try {
+        const tab = await chrome.tabs.get(state.activeTabId);
+        lines.push("");
+        lines.push(`  \x1b[90mActive tab: ${tab.id} \u2014 ${tab.title ?? "unknown"} (${tab.url ?? ""})\x1b[0m`);
+      } catch { /* tab gone */ }
+    }
+    return lines.join("\r\n");
+  }
+
+  if (browserPath[0] === "tabs") {
+    // Flat list of all tabs
+    const lines: string[] = [
+      `  \x1b[90mID     TITLE                                URL                                    WIN\x1b[0m`,
+    ];
+    for (const win of allWindows) {
+      for (const tab of win.tabs ?? []) {
+        const current = tab.id === state.activeTabId ? " \x1b[32m*current\x1b[0m" : "";
+        const active = tab.active ? "\x1b[33m*\x1b[0m" : " ";
+        const id = String(tab.id ?? "?").padEnd(6);
+        const title = (tab.title ?? "untitled").slice(0, 36).padEnd(36);
+        const url = (tab.url ?? "").slice(0, 38).padEnd(38);
+        const winId = String(win.id ?? "?");
+        lines.push(`  ${active}${id} ${title} ${url} ${winId}${current}`);
+      }
+    }
+    lines.push("");
+    lines.push(`\x1b[90mUse 'cd <id>' or 'cd <url-pattern>' to enter a tab.\x1b[0m`);
+    return lines.join("\r\n");
+  }
+
+  if (browserPath[0] === "windows" && browserPath.length === 1) {
+    // List windows
+    const lines: string[] = [
+      `  \x1b[90mID     TABS    STATUS\x1b[0m`,
+    ];
+    for (const win of allWindows) {
+      const tabCount = String(win.tabs?.length ?? 0).padEnd(7);
+      const status = win.focused ? "\x1b[33mfocused\x1b[0m" : "";
+      lines.push(`  ${String(win.id ?? "?").padEnd(6)} ${tabCount} ${status}`);
+    }
+    return lines.join("\r\n");
+  }
+
+  if (browserPath[0] === "windows" && browserPath.length === 2) {
+    // List tabs in a specific window
+    const windowId = parseInt(browserPath[1], 10);
+    const win = allWindows.find((w) => w.id === windowId);
+    if (!win) return `\x1b[31mWindow ${windowId} not found.\x1b[0m`;
+
+    const lines: string[] = [
+      `  \x1b[90mID     TITLE                                URL\x1b[0m`,
+    ];
+    for (const tab of win.tabs ?? []) {
+      const current = tab.id === state.activeTabId ? " \x1b[32m*current\x1b[0m" : "";
+      const id = String(tab.id ?? "?").padEnd(6);
+      const title = (tab.title ?? "untitled").slice(0, 36).padEnd(36);
+      const url = (tab.url ?? "").slice(0, 38);
+      lines.push(`  ${id} ${title} ${url}${current}`);
+    }
+    lines.push("");
+    lines.push(`\x1b[90mUse 'cd <id>' or 'cd <url-pattern>' to enter a tab.\x1b[0m`);
+    return lines.join("\r\n");
+  }
+
+  return `\x1b[31mInvalid browser path.\x1b[0m`;
+}
+
+// ---- tabs / windows shortcut commands ----
+
+async function handleTabs(): Promise<string> {
+  return await listBrowserLevel(["tabs"]);
+}
+
+async function handleWindows(): Promise<string> {
+  return await listBrowserLevel(["windows"]);
+}
+
 function formatColoredName(node: VFSNode): string {
   switch (node.role) {
     case "button":
@@ -913,70 +1220,195 @@ function formatColoredName(node: VFSNode): string {
   }
 }
 
-// ---- cd ----
+// ---- cd (unified hierarchy) ----
 
 async function handleCd(args: string[]): Promise<string> {
-  ensureAttached();
-  await ensureFreshTree();
+  const target = args.length > 0 ? args[0] : "";
 
-  if (args.length === 0 || args[0] === "/") {
-    const root = findRootNode(nodeMap);
-    if (root) {
-      state.cwd = [root.nodeId];
-      state.cwdNames = ["/"];
-    }
+  // cd / or cd ~ or cd (empty) — go to browser root
+  if (target === "/" || target === "~" || target === "") {
+    state.path = [];
+    // Don't detach CDP — keep it lazy for quick re-entry
     return "";
   }
 
-  const target = args[0];
-
-  if (target === "..") {
-    if (state.cwd.length > 1) {
-      state.cwd.pop();
-      state.cwdNames.pop();
-    }
-    return "";
+  // cd ~/... — absolute path from browser root
+  if (target.startsWith("~/")) {
+    state.path = [];
+    const afterTilde = target.slice(2);
+    if (!afterTilde) return "";
+    const segments = afterTilde.split("/").filter(Boolean);
+    return await navigateSegments(segments);
   }
 
-  const pathParts = target.split("/").filter(Boolean);
+  // Relative path: split into segments and navigate
+  const segments = target.split("/").filter(Boolean);
+  return await navigateSegments(segments);
+}
 
-  for (const part of pathParts) {
-    if (part === "..") {
-      if (state.cwd.length > 1) {
-        state.cwd.pop();
-        state.cwdNames.pop();
+/**
+ * Navigate through path segments from the current position.
+ * Handles both browser-level and DOM-level navigation seamlessly.
+ */
+async function navigateSegments(segments: string[]): Promise<string> {
+  for (const segment of segments) {
+    if (segment === ".") continue;
+
+    if (segment === "..") {
+      if (state.path.length === 0) {
+        // Already at browser root, can't go higher
+        continue;
+      }
+
+      // Check if we're leaving a tab (popping from tab entry point)
+      const tabId = getTabIdFromPath(state.path);
+      const domStart = getDomStartIndex(state.path);
+
+      if (tabId !== null && domStart >= 0 && state.path.length > domStart) {
+        // We're in DOM — pop one DOM level
+        state.path.pop();
+        state.axNodeIds.pop();
+        // If we've popped back to the tab entry point, pop out of the tab entirely
+        if (state.path.length === domStart) {
+          state.path.pop(); // Pop the tab ID segment
+          state.axNodeIds = [];
+        }
+      } else {
+        // We're at browser level — pop one browser segment
+        state.path.pop();
+        state.axNodeIds = [];
       }
       continue;
     }
 
+    // Determine what level we're at to interpret the segment
+    const result = await navigateOneSegment(segment);
+    if (result) return result; // Error message
+  }
+  return "";
+}
+
+/**
+ * Navigate a single segment from the current path position.
+ * Returns an error string, or empty string on success.
+ */
+async function navigateOneSegment(segment: string): Promise<string> {
+  const tabId = getTabIdFromPath(state.path);
+
+  // If inside a tab's DOM, navigate AX tree
+  if (tabId !== null) {
+    // Ensure CDP is attached for this tab
+    if (state.activeTabId !== tabId || nodeMap.size === 0) {
+      try {
+        await cdpSwitchToTab(tabId);
+      } catch (err: any) {
+        return `\x1b[31mFailed to attach to tab ${tabId}: ${err.message}\x1b[0m`;
+      }
+    }
+
+    await ensureFreshTree();
+
     const currentId = getCurrentNodeId();
-    const match = findChildByName(currentId, part, nodeMap);
+    const match = findChildByName(currentId, segment, nodeMap);
 
     if (!match) {
-      return `\x1b[31mcd: ${part}: No such directory\x1b[0m`;
+      return `\x1b[31mcd: ${segment}: No such directory\x1b[0m`;
     }
     if (!match.isDirectory) {
-      return `\x1b[31mcd: ${part}: Not a directory (type: [x] ${match.role})\x1b[0m`;
+      return `\x1b[31mcd: ${segment}: Not a directory (type: [x] ${match.role})\x1b[0m`;
     }
 
-    state.cwd.push(match.axNodeId);
-    state.cwdNames.push(match.name);
+    state.path.push(match.name);
+    state.axNodeIds.push(match.axNodeId);
+    return "";
   }
 
-  return "";
+  // Browser-level navigation
+  const depth = state.path.length;
+
+  if (depth === 0) {
+    // At browser root (~): only "tabs" and "windows" are valid
+    if (segment === "tabs" || segment === "windows") {
+      state.path.push(segment);
+      return "";
+    }
+    return `\x1b[31mcd: ${segment}: No such directory (try 'tabs' or 'windows')\x1b[0m`;
+  }
+
+  if (state.path[0] === "tabs" && depth === 1) {
+    // At ~/tabs/ — segment is a tab target (ID or substring)
+    return await enterTab(segment);
+  }
+
+  if (state.path[0] === "windows" && depth === 1) {
+    // At ~/windows/ — segment is a window ID
+    const windowId = parseInt(segment, 10);
+    if (isNaN(windowId)) {
+      return `\x1b[31mcd: ${segment}: Invalid window ID\x1b[0m`;
+    }
+    try {
+      const win = await chrome.windows.get(windowId, { populate: true });
+      if (!win) return `\x1b[31mcd: ${segment}: Window not found\x1b[0m`;
+      state.path.push(segment);
+      return "";
+    } catch {
+      return `\x1b[31mcd: ${segment}: Window not found\x1b[0m`;
+    }
+  }
+
+  if (state.path[0] === "windows" && depth === 2) {
+    // At ~/windows/<id>/ — segment is a tab target
+    return await enterTab(segment);
+  }
+
+  return `\x1b[31mcd: ${segment}: Cannot navigate deeper\x1b[0m`;
+}
+
+/**
+ * Enter a tab by ID or substring match.
+ * Pushes the tab ID onto state.path, attaches CDP, and loads AX tree.
+ */
+async function enterTab(target: string): Promise<string> {
+  try {
+    const tab = await resolveTabTarget(target);
+    if (!tab?.id) return `\x1b[31mcd: Tab has no ID.\x1b[0m`;
+
+    // Push tab ID onto path
+    state.path.push(String(tab.id));
+
+    // Attach CDP and load AX tree
+    const { nodeCount, iframeCount } = await cdpSwitchToTab(tab.id);
+
+    const title = tab.title ?? "unknown";
+    const url = tab.url ?? "unknown";
+
+    const lines = [
+      `\x1b[32m\u2713 Entered tab ${tab.id}\x1b[0m`,
+      `  \x1b[37mTitle: ${title}\x1b[0m`,
+      `  \x1b[37mURL:   ${url}\x1b[0m`,
+      `  \x1b[90mAX Nodes: ${nodeCount}\x1b[0m`,
+    ];
+    if (iframeCount > 0) {
+      lines.push(`  \x1b[90mIframes: ${iframeCount}\x1b[0m`);
+    }
+    lines.push("");
+    return lines.join("\r\n");
+  } catch (err: any) {
+    return `\x1b[31mcd: ${err.message}\x1b[0m`;
+  }
 }
 
 // ---- pwd ----
 
 function handlePwd(): string {
-  if (state.cwdNames.length <= 1) return "/";
-  return "/" + state.cwdNames.slice(1).join("/");
+  if (state.path.length === 0) return "~";
+  return "~/" + state.path.join("/");
 }
 
 // ---- cat ----
 
 async function handleCat(args: string[]): Promise<string> {
-  ensureAttached();
+  ensureInsideTab();
   await ensureFreshTree();
 
   if (args.length === 0) {
@@ -1030,10 +1462,68 @@ async function handleCat(args: string[]): Promise<string> {
   return lines.join("\r\n");
 }
 
+// ---- text (bulk text extraction) ----
+
+async function handleText(args: string[]): Promise<string> {
+  ensureInsideTab();
+  await ensureFreshTree();
+
+  const pa = parseArgs(args);
+  const maxLength = pa.named["-n"] ? parseInt(pa.named["-n"], 10) : 0;
+
+  let backendId: number | undefined;
+  let targetName = "current directory";
+
+  if (pa.positional.length > 0) {
+    const name = pa.positional[0];
+    const currentId = getCurrentNodeId();
+    const match = findChildByName(currentId, name, nodeMap);
+    if (!match) {
+      return `\x1b[31mtext: ${name}: No such file or directory\x1b[0m`;
+    }
+    backendId = match.backendDOMNodeId;
+    targetName = match.name;
+  } else {
+    const currentId = getCurrentNodeId();
+    const node = nodeMap.get(currentId);
+    backendId = node?.backendDOMNodeId;
+    const domSegs = getDomSegments();
+    targetName = domSegs.length > 0 ? domSegs[domSegs.length - 1] : "/";
+  }
+
+  if (!backendId) {
+    return `\x1b[31mtext: ${targetName}: No DOM node backing (AX-only node)\x1b[0m`;
+  }
+
+  try {
+    let text = await cdp.getTextContent(backendId);
+    text = text.trim();
+
+    if (!text) {
+      return `\x1b[33m(no text content in ${targetName})\x1b[0m`;
+    }
+
+    const lines: string[] = [];
+    lines.push(`\x1b[1;36m--- Text: ${targetName} ---\x1b[0m`);
+
+    if (maxLength > 0 && text.length > maxLength) {
+      lines.push(text.slice(0, maxLength));
+      lines.push(`\x1b[90m... (${text.length} chars total, showing first ${maxLength})\x1b[0m`);
+    } else {
+      lines.push(text);
+      lines.push(`\x1b[90m(${text.length} chars)\x1b[0m`);
+    }
+
+    return lines.join("\r\n");
+  } catch (err: any) {
+    return `\x1b[31mtext: Error extracting text: ${err.message}\x1b[0m`;
+  }
+}
+
 // ---- click ----
 
 async function handleClick(args: string[]): Promise<string> {
-  ensureAttached();
+  ensureInsideTab();
   await ensureFreshTree();
 
   if (args.length === 0) {
@@ -1054,14 +1544,13 @@ async function handleClick(args: string[]): Promise<string> {
 
   try {
     await cdp.clickByBackendNodeId(match.backendDOMNodeId);
-    // Mark tree stale — click may trigger navigation or DOM changes
     treeStale = true;
-    return `\x1b[32m✓ Clicked: ${match.name} (${match.role})\x1b[0m\r\n\x1b[90m(tree will auto-refresh on next command)\x1b[0m`;
+    return `\x1b[32m\u2713 Clicked: ${match.name} (${match.role})\x1b[0m\r\n\x1b[90m(tree will auto-refresh on next command)\x1b[0m`;
   } catch {
     try {
       await cdp.clickByCoordinates(match.backendDOMNodeId);
       treeStale = true;
-      return `\x1b[32m✓ Clicked (coords): ${match.name} (${match.role})\x1b[0m\r\n\x1b[90m(tree will auto-refresh on next command)\x1b[0m`;
+      return `\x1b[32m\u2713 Clicked (coords): ${match.name} (${match.role})\x1b[0m\r\n\x1b[90m(tree will auto-refresh on next command)\x1b[0m`;
     } catch (err: any) {
       return `\x1b[31mclick failed: ${err.message}\x1b[0m`;
     }
@@ -1071,7 +1560,7 @@ async function handleClick(args: string[]): Promise<string> {
 // ---- focus ----
 
 async function handleFocus(args: string[]): Promise<string> {
-  ensureAttached();
+  ensureInsideTab();
   await ensureFreshTree();
 
   if (args.length === 0) {
@@ -1091,13 +1580,13 @@ async function handleFocus(args: string[]): Promise<string> {
   }
 
   await cdp.focusByBackendNodeId(match.backendDOMNodeId);
-  return `\x1b[32m✓ Focused: ${match.name}\x1b[0m`;
+  return `\x1b[32m\u2713 Focused: ${match.name}\x1b[0m`;
 }
 
 // ---- type ----
 
 async function handleType(args: string[]): Promise<string> {
-  ensureAttached();
+  ensureInsideTab();
 
   if (args.length === 0) {
     return "\x1b[31mUsage: type <text> (see type --help)\x1b[0m";
@@ -1105,13 +1594,13 @@ async function handleType(args: string[]): Promise<string> {
 
   const text = args.join(" ");
   await cdp.typeText(text);
-  return `\x1b[32m✓ Typed ${text.length} characters\x1b[0m`;
+  return `\x1b[32m\u2713 Typed ${text.length} characters\x1b[0m`;
 }
 
 // ---- grep ----
 
 async function handleGrep(args: string[]): Promise<string> {
-  ensureAttached();
+  ensureInsideTab();
   await ensureFreshTree();
 
   const pa = parseArgs(args);
@@ -1157,7 +1646,7 @@ async function handleGrep(args: string[]): Promise<string> {
 // ---- find (deep recursive search with full paths) ----
 
 async function handleFind(args: string[]): Promise<string> {
-  ensureAttached();
+  ensureInsideTab();
   await ensureFreshTree();
 
   const pa = parseArgs(args);
@@ -1253,7 +1742,7 @@ function collectAllDescendants(
 // ---- tree ----
 
 async function handleTree(args: string[]): Promise<string> {
-  ensureAttached();
+  ensureInsideTab();
   await ensureFreshTree();
 
   const pa = parseArgs(args);
@@ -1283,8 +1772,8 @@ function buildTreeLines(
 
   children.forEach((child, i) => {
     const isLast = i === children.length - 1;
-    const connector = isLast ? "└── " : "├── ";
-    const childPrefix = isLast ? "    " : "│   ";
+    const connector = isLast ? "\u2514\u2500\u2500 " : "\u251c\u2500\u2500 ";
+    const childPrefix = isLast ? "    " : "\u2502   ";
     const tp = typePrefix(child);
 
     const display = child.isDirectory
@@ -1302,9 +1791,7 @@ function buildTreeLines(
 // ---- whoami ----
 
 async function handleWhoami(): Promise<string> {
-  if (!state.attachedTabId) {
-    return "\x1b[31mNot attached. Run 'attach' first.\x1b[0m";
-  }
+  ensureInsideTab();
 
   try {
     const url = await cdp.getPageUrl();
@@ -1358,7 +1845,119 @@ function handleExport(args: string[]): string {
   const value = joined.slice(eqIndex + 1).trim();
   state.env[key] = value;
 
-  return `\x1b[32m✓ ${key}=${value}\x1b[0m`;
+  return `\x1b[32m\u2713 ${key}=${value}\x1b[0m`;
+}
+
+// ---- navigate / open ----
+
+async function handleNavigate(args: string[]): Promise<string> {
+  if (args.length === 0) {
+    return "\x1b[31mUsage: navigate <url> (see navigate --help)\x1b[0m";
+  }
+
+  ensureInsideTab();
+
+  let url = args[0];
+  if (!url.match(/^https?:\/\//i)) {
+    url = "https://" + url;
+  }
+
+  const tabId = state.activeTabId!;
+
+  // Detach first (navigation will invalidate CDP state)
+  await cdp.detach();
+  state.activeTabId = null;
+
+  // Navigate
+  await chrome.tabs.update(tabId, { url });
+
+  // Wait for the page to load
+  await new Promise<void>((resolve) => {
+    const listener = (id: number, info: { status?: string }) => {
+      if (id === tabId && info.status === "complete") {
+        chrome.tabs.onUpdated.removeListener(listener);
+        resolve();
+      }
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+    setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve();
+    }, 15000);
+  });
+
+  // Re-attach and fetch new AX tree
+  try {
+    const { nodeCount } = await cdpSwitchToTab(tabId);
+
+    // Reset DOM portion of path (keep browser portion up to tab)
+    const domStart = getDomStartIndex(state.path);
+    if (domStart >= 0) {
+      state.path = state.path.slice(0, domStart);
+    }
+
+    const tab = await chrome.tabs.get(tabId);
+    return [
+      `\x1b[32m\u2713 Navigated\x1b[0m`,
+      `  \x1b[37mURL:   ${tab.url ?? url}\x1b[0m`,
+      `  \x1b[37mTitle: ${tab.title ?? "unknown"}\x1b[0m`,
+      `  \x1b[90mAX Nodes: ${nodeCount}\x1b[0m`,
+      "",
+    ].join("\r\n");
+  } catch (err: any) {
+    return `\x1b[32m\u2713 Navigated to ${url}\x1b[0m\r\n\x1b[31mRe-attach failed: ${err.message}\x1b[0m`;
+  }
+}
+
+async function handleOpen(args: string[]): Promise<string> {
+  if (args.length === 0) {
+    return "\x1b[31mUsage: open <url> (see open --help)\x1b[0m";
+  }
+
+  let url = args[0];
+  if (!url.match(/^https?:\/\//i)) {
+    url = "https://" + url;
+  }
+
+  // Create new tab
+  const tab = await chrome.tabs.create({ url, active: true });
+  if (!tab.id) return "\x1b[31mError: Failed to create tab.\x1b[0m";
+
+  // Wait for load
+  await new Promise<void>((resolve) => {
+    const listener = (id: number, info: { status?: string }) => {
+      if (id === tab.id && info.status === "complete") {
+        chrome.tabs.onUpdated.removeListener(listener);
+        resolve();
+      }
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+    setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve();
+    }, 15000);
+  });
+
+  // Attach and enter the new tab
+  try {
+    const { nodeCount } = await cdpSwitchToTab(tab.id);
+
+    // Set path to ~/tabs/<newTabId>
+    state.path = ["tabs", String(tab.id)];
+
+    const updatedTab = await chrome.tabs.get(tab.id);
+    return [
+      `\x1b[32m\u2713 Opened new tab\x1b[0m`,
+      `  \x1b[37mURL:   ${updatedTab.url ?? url}\x1b[0m`,
+      `  \x1b[37mTitle: ${updatedTab.title ?? "unknown"}\x1b[0m`,
+      `  \x1b[90mAX Nodes: ${nodeCount}\x1b[0m`,
+      "",
+    ].join("\r\n");
+  } catch (err: any) {
+    // Still set path even if attach fails
+    state.path = ["tabs", String(tab.id)];
+    return `\x1b[32m\u2713 Opened ${url}\x1b[0m\r\n\x1b[31mAttach failed: ${err.message}\x1b[0m`;
+  }
 }
 
 // ---- connect / disconnect (MCP WebSocket bridge) ----
@@ -1371,7 +1970,7 @@ function handleConnect(args: string[]): string {
     if (wsConnected) {
       return `\x1b[32mConnected\x1b[0m to MCP server on port ${wsPort}.\r\nRun \x1b[33mdisconnect\x1b[0m to close.`;
     }
-    if (wsToken) {
+    if (wsEnabled && wsToken) {
       return `\x1b[33mConnecting\x1b[0m to MCP server on port ${wsPort}... (waiting for server)\r\nRun \x1b[33mdisconnect\x1b[0m to cancel.`;
     }
     return "\x1b[31mUsage: connect <token> (see connect --help)\x1b[0m";
@@ -1379,45 +1978,47 @@ function handleConnect(args: string[]): string {
 
   const token = pa.positional[0];
 
-  // Store token and port for reconnection on service worker restart
+  // Store token, port, and enable
   wsToken = token;
   wsPort = port;
-  chrome.storage.local.set({ ws_token: token, ws_port: port });
+  wsEnabled = true;
+  chrome.storage.local.set({ ws_enabled: true, ws_token: token, ws_port: port });
 
   // Initiate connection
   wsConnect();
 
   return [
-    "\x1b[1;31m┌─────────────────────────────────────────────────────────┐\x1b[0m",
-    "\x1b[1;31m│\x1b[0m  \x1b[1;33m⚠  SECURITY WARNING\x1b[0m                                    \x1b[1;31m│\x1b[0m",
-    "\x1b[1;31m│\x1b[0m                                                         \x1b[1;31m│\x1b[0m",
-    "\x1b[1;31m│\x1b[0m  You are granting an external process (MCP server)      \x1b[1;31m│\x1b[0m",
-    "\x1b[1;31m│\x1b[0m  the ability to execute commands in your browser.       \x1b[1;31m│\x1b[0m",
-    "\x1b[1;31m│\x1b[0m                                                         \x1b[1;31m│\x1b[0m",
-    "\x1b[1;31m│\x1b[0m  \x1b[37m• Only connect to MCP servers you started yourself\x1b[0m    \x1b[1;31m│\x1b[0m",
-    "\x1b[1;31m│\x1b[0m  \x1b[37m• The MCP server controls what commands are allowed\x1b[0m   \x1b[1;31m│\x1b[0m",
-    "\x1b[1;31m│\x1b[0m  \x1b[37m• Use --allow-write on the server to enable clicks\x1b[0m   \x1b[1;31m│\x1b[0m",
-    "\x1b[1;31m│\x1b[0m  \x1b[37m• Run 'disconnect' to stop at any time\x1b[0m               \x1b[1;31m│\x1b[0m",
-    "\x1b[1;31m└─────────────────────────────────────────────────────────┘\x1b[0m",
+    "\x1b[1;31m\u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510\x1b[0m",
+    "\x1b[1;31m\u2502\x1b[0m  \x1b[1;33m\u26a0  SECURITY WARNING\x1b[0m                                    \x1b[1;31m\u2502\x1b[0m",
+    "\x1b[1;31m\u2502\x1b[0m                                                         \x1b[1;31m\u2502\x1b[0m",
+    "\x1b[1;31m\u2502\x1b[0m  You are granting an external process (MCP server)      \x1b[1;31m\u2502\x1b[0m",
+    "\x1b[1;31m\u2502\x1b[0m  the ability to execute commands in your browser.       \x1b[1;31m\u2502\x1b[0m",
+    "\x1b[1;31m\u2502\x1b[0m                                                         \x1b[1;31m\u2502\x1b[0m",
+    "\x1b[1;31m\u2502\x1b[0m  \x1b[37m\u2022 Only connect to MCP servers you started yourself\x1b[0m    \x1b[1;31m\u2502\x1b[0m",
+    "\x1b[1;31m\u2502\x1b[0m  \x1b[37m\u2022 The MCP server controls what commands are allowed\x1b[0m   \x1b[1;31m\u2502\x1b[0m",
+    "\x1b[1;31m\u2502\x1b[0m  \x1b[37m\u2022 Use --allow-write on the server to enable clicks\x1b[0m   \x1b[1;31m\u2502\x1b[0m",
+    "\x1b[1;31m\u2502\x1b[0m  \x1b[37m\u2022 Run 'disconnect' to stop at any time\x1b[0m               \x1b[1;31m\u2502\x1b[0m",
+    "\x1b[1;31m\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\x1b[0m",
     "",
-    `\x1b[32m✓ Connecting to MCP server on ws://127.0.0.1:${port}\x1b[0m`,
+    `\x1b[32m\u2713 Connecting to MCP server on ws://127.0.0.1:${port}\x1b[0m`,
     "",
   ].join("\r\n");
 }
 
 function handleDisconnect(): string {
-  if (!wsToken && !wsConnected) {
+  if (!wsEnabled && !wsConnected) {
     return "\x1b[33mNot connected to any MCP server.\x1b[0m";
   }
 
   wsDisconnect();
-  return "\x1b[32m✓ Disconnected from MCP server. Token cleared.\x1b[0m";
+  chrome.storage.local.set({ ws_enabled: false });
+  return "\x1b[32m\u2713 Disconnected from MCP server.\x1b[0m";
 }
 
 // ---- debug ----
 
 async function handleDebug(args: string[]): Promise<string> {
-  ensureAttached();
+  ensureInsideTab();
   await ensureFreshTree();
 
   const sub = args[0] ?? "stats";

@@ -31,7 +31,7 @@ const ALLOWED_DOMAINS = getFlagValue("--domains", "")
 
 // ---- Auth Token ----
 
-const AUTH_TOKEN = randomBytes(24).toString("hex");
+const AUTH_TOKEN = getFlagValue("--token", "") || randomBytes(24).toString("hex");
 
 // ---- Logging ----
 
@@ -50,11 +50,13 @@ function audit(entry: string): void {
 
 // ---- Command Tiers ----
 
+const NAVIGATE_COMMANDS = new Set(["navigate", "goto", "open"]);
 const WRITE_COMMANDS = new Set(["click", "focus", "type"]);
 const SENSITIVE_COMMANDS = new Set(["whoami"]);
 
-function getCommandTier(command: string): "read" | "write" | "sensitive" {
+function getCommandTier(command: string): "read" | "navigate" | "write" | "sensitive" {
   const cmd = command.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
+  if (NAVIGATE_COMMANDS.has(cmd)) return "navigate";
   if (WRITE_COMMANDS.has(cmd)) return "write";
   if (SENSITIVE_COMMANDS.has(cmd)) return "sensitive";
   return "read";
@@ -62,6 +64,9 @@ function getCommandTier(command: string): "read" | "write" | "sensitive" {
 
 function isCommandAllowed(command: string): { allowed: boolean; reason?: string } {
   const tier = getCommandTier(command);
+  if (tier === "navigate" && !ALLOW_WRITE) {
+    return { allowed: false, reason: "Navigation commands (navigate/open) are disabled. Start the MCP server with --allow-write or --allow-all." };
+  }
   if (tier === "write" && !ALLOW_WRITE) {
     return { allowed: false, reason: "Write commands (click/focus/type) are disabled. Start the MCP server with --allow-write or --allow-all." };
   }
@@ -127,6 +132,17 @@ const pendingRequests = new Map<
 >();
 
 const wss = new WebSocketServer({ port: PORT, host: "127.0.0.1" });
+
+wss.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EADDRINUSE") {
+    log(`ERROR: Port ${PORT} is already in use.`);
+    log("Another MCP server or process is using this port.");
+    log(`Try: --port ${PORT + 1}  (or kill the other process)`);
+    process.exit(1);
+  }
+  log(`WebSocket server error: ${err.message}`);
+  process.exit(1);
+});
 
 wss.on("listening", () => {
   log(`WebSocket server listening on ws://127.0.0.1:${PORT}`);
@@ -248,7 +264,7 @@ async function executeWithSecurity(command: string): Promise<string> {
   }
 
   // Execute
-  const tag = tier === "write" ? "[WRITE] " : tier === "sensitive" ? "[SENSITIVE] " : "";
+  const tag = tier === "write" ? "[WRITE] " : tier === "navigate" ? "[NAV] " : tier === "sensitive" ? "[SENSITIVE] " : "";
   audit(`${tag}EXECUTE: ${command}`);
 
   try {
@@ -265,26 +281,58 @@ async function executeWithSecurity(command: string): Promise<string> {
 
 // ---- MCP Server ----
 
-const server = new McpServer({
-  name: "agentshell",
-  version: "1.0.0",
-});
+const server = new McpServer(
+  {
+    name: "agentshell",
+    version: "1.0.0",
+  },
+  {
+    instructions: `AgentShell gives you full browser control through a filesystem metaphor — the DOM's Accessibility Tree is mapped to directories (containers) and files (interactive elements like buttons, links, inputs). The browser itself (windows, tabs) is also part of the hierarchy.
+
+WHEN TO USE AGENTSHELL (prefer over native browser tools):
+- Navigating to websites: use agentshell_navigate or agentshell_open
+- Listing/switching tabs: use agentshell_tabs to see all tabs, then agentshell_cd with "~/tabs/<id>" to switch
+- Reading page content: use agentshell_ls, agentshell_cat, agentshell_text, agentshell_tree, agentshell_find, agentshell_grep
+- Interacting with pages: use agentshell_click, agentshell_focus, agentshell_type
+- Understanding page structure: use agentshell_tree for a hierarchy view
+
+TYPICAL WORKFLOW:
+1. agentshell_tabs (see all open tabs) or agentshell_navigate/agentshell_open (go to a URL)
+2. agentshell_cd with "~/tabs/<id>" to switch to a specific tab
+3. agentshell_tree (see page structure)
+4. agentshell_cd / agentshell_ls (drill into sections)
+5. agentshell_text (bulk extract text from a section — much faster than multiple cat calls)
+6. agentshell_find or agentshell_grep (search for specific elements)
+7. agentshell_click / agentshell_focus / agentshell_type (interact)
+
+BROWSER HIERARCHY:
+- "~" is the browser root. "cd ~" goes there. "ls" at ~ shows windows/ and tabs/.
+- "~/tabs/" lists all open tabs. "cd ~/tabs/<id>" switches to that tab.
+- "~/windows/" lists Chrome windows. "cd ~/windows/<id>/" shows tabs in that window.
+- "/" is the current tab's DOM tree root (Accessibility Tree). All DOM commands work here.
+- "cd .." from / goes up to ~ (browser level). "cd /" returns to the DOM root.
+
+AgentShell works with the Accessibility Tree, which means element names are human-readable (e.g. "Sign in", "Search", "Submit") rather than CSS selectors. Use agentshell_find to locate elements by name, role, or text content.
+
+Note: When running under Claude Desktop, use --no-confirm to avoid /dev/tty prompts for click/type actions.`,
+  }
+);
 
 // -- Read tier tools (always available) --
 
 server.tool(
-  "agentshell_attach",
-  "Connect to the active browser tab via Chrome DevTools Protocol. Must be called before any other commands.",
+  "agentshell_tabs",
+  "List all open browser tabs with their IDs, titles, URLs, and window info. Use this to find the right tab before switching. Equivalent to 'ls ~/tabs/'.",
   {},
   async () => ({
-    content: [{ type: "text", text: await executeWithSecurity("attach") }],
+    content: [{ type: "text", text: await executeWithSecurity("tabs") }],
   })
 );
 
 server.tool(
   "agentshell_ls",
-  "List children of the current directory in the DOM tree. Shows elements as files (interactive) and directories (containers). Supports flags: -l (long format with roles), -r (recursive), -n N (limit), --offset N (pagination), --type ROLE (filter by role like 'button' or 'link'), --count (count only).",
-  { options: z.string().optional().describe("Flags and options, e.g. '-l', '-n 10', '--type button'") },
+  "List children of the current directory. In the DOM tree: shows elements as files and directories. At the browser level (~): shows tabs/windows. Supports flags: -l (long format), -r (recursive), -n N (limit), --offset N, --type ROLE, --count.",
+  { options: z.string().optional().describe("Flags and options, e.g. '-l', '-n 10', '--type button', or '~/tabs/' for tab listing") },
   async ({ options }) => ({
     content: [{ type: "text", text: await executeWithSecurity(`ls ${options ?? ""}`.trim()) }],
   })
@@ -292,8 +340,8 @@ server.tool(
 
 server.tool(
   "agentshell_cd",
-  "Navigate into a directory (container element) in the DOM tree. Use '..' to go up, '/' to go to root, or 'main/form' for multi-level paths.",
-  { path: z.string().describe("Directory path to navigate to") },
+  "Change directory. In the DOM tree: navigate containers with paths like 'main/form', '..', '/'. For browser-level: 'cd ~' (browser root), 'cd ~/tabs/<id>' (switch to tab by ID), 'cd ~/tabs/<pattern>' (switch by title/URL match), 'cd ~/windows/<id>' (window's tabs). 'cd ..' from DOM root goes to browser level.",
+  { path: z.string().describe("Path: DOM path, '~', '~/tabs/<id>', '~/windows/<id>', '..', '/'") },
   async ({ path }) => ({
     content: [{ type: "text", text: await executeWithSecurity(`cd ${path}`) }],
   })
@@ -361,6 +409,21 @@ server.tool(
 );
 
 server.tool(
+  "agentshell_text",
+  "Extract all text content from the current directory or a named child, including all descendants. Returns the full textContent in a single call — much more efficient than multiple agentshell_cat calls for reading articles or page content.",
+  {
+    name: z.string().optional().describe("Name of a child element to extract text from (default: current directory)"),
+    limit: z.number().optional().describe("Maximum characters to return"),
+  },
+  async ({ name, limit }) => {
+    let cmd = "text";
+    if (name) cmd += ` ${name}`;
+    if (limit) cmd += ` -n ${limit}`;
+    return { content: [{ type: "text", text: await executeWithSecurity(cmd) }] };
+  }
+);
+
+server.tool(
   "agentshell_refresh",
   "Force re-fetch the Accessibility Tree. Use after page navigation or significant DOM changes. Note: the tree also auto-refreshes when changes are detected.",
   {},
@@ -396,6 +459,24 @@ if (ALLOW_WRITE) {
     { text: z.string().describe("Text to type into the focused element") },
     async ({ text }) => ({
       content: [{ type: "text", text: await executeWithSecurity(`type ${text}`) }],
+    })
+  );
+
+  server.tool(
+    "agentshell_navigate",
+    "Navigate the current tab to a URL. Automatically rebuilds the accessibility tree after navigation completes. Requires a tab context (cd into a tab first). Use this to go to a specific website without opening a new tab.",
+    { url: z.string().describe("URL to navigate to (e.g. 'https://example.com' or 'example.com')") },
+    async ({ url }) => ({
+      content: [{ type: "text", text: await executeWithSecurity(`navigate ${url}`) }],
+    })
+  );
+
+  server.tool(
+    "agentshell_open",
+    "Open a URL in a new browser tab and enter it (path becomes ~/tabs/<id>). Automatically builds the accessibility tree after the page loads. Works from any location. Use this when you want to open a new tab rather than navigating the current one.",
+    { url: z.string().describe("URL to open in a new tab (e.g. 'https://example.com' or 'example.com')") },
+    async ({ url }) => ({
+      content: [{ type: "text", text: await executeWithSecurity(`open ${url}`) }],
     })
   );
 }

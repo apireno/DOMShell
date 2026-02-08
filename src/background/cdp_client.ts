@@ -212,6 +212,29 @@ export class CDPClient {
   }
 
   /**
+   * Read the visible (rendered) text of an element using innerText.
+   * Unlike textContent, innerText respects CSS visibility (display:none, etc.)
+   * and returns only what the user would see on the rendered page.
+   */
+  async getInnerText(backendDOMNodeId: number): Promise<string> {
+    const { object } = await this.send<{ object: { objectId: string } }>(
+      "DOM.resolveNode",
+      { backendNodeId: backendDOMNodeId }
+    );
+
+    const { result } = await this.send<{ result: { value: string } }>(
+      "Runtime.callFunctionOn",
+      {
+        objectId: object.objectId,
+        functionDeclaration: `function() { return this.innerText || this.value || ''; }`,
+        returnByValue: true,
+      }
+    );
+
+    return result.value;
+  }
+
+  /**
    * Get useful DOM properties for an element (tag, href, src, id, class, outerHTML snippet).
    */
   async getElementProperties(backendDOMNodeId: number): Promise<Record<string, string>> {

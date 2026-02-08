@@ -890,6 +890,7 @@ dom@shell:$ disconnect
 
 ### Agent Ergonomics
 
+- [x] **`--text` flag** — show visible text previews inline with `ls` and `find` using `.innerText` (rendered text only, respects CSS visibility); configurable length via `--textlen N`; `cat` also shows VisibleText separately from textContent
 - [ ] **`bookmark` / `alias`** — save named paths for quick navigation (e.g. `bookmark inbox ~/tabs/gmail/main/inbox_list`)
 - [ ] **Multi-tab operations** — run a command across multiple tabs (e.g. `each tab text main` to extract text from every open tab)
 - [ ] **Structured output mode** — `--json` flag on commands for machine-parseable output (e.g. `ls --json`, `cat --json`)

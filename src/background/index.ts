@@ -117,6 +117,13 @@ async function cdpSwitchToTab(tabId: number): Promise<{ tab: chrome.tabs.Tab; no
   const root = findRootNode(nodeMap);
   state.axNodeIds = root ? [root.nodeId] : [];
 
+  // Clear stale flag — we just fetched a fresh tree.
+  // CDP events (DOM.documentUpdated) fire during attach and set treeStale=true,
+  // but our tree is already up-to-date. Without this, ensureFreshTree() would
+  // immediately re-fetch on the next command, and the new AX node IDs may differ,
+  // causing a spurious "No DOM context" error.
+  treeStale = false;
+
   const tab = await chrome.tabs.get(tabId);
   let iframeCount = 0;
   for (const node of nodeMap.values()) {
@@ -439,6 +446,15 @@ function typePrefix(node: VFSNode): string {
   return "[-]";
 }
 
+function formatTextPreview(text: string, maxLen: number): string {
+  const cleaned = text.trim().replace(/\s+/g, " ");
+  if (!cleaned) return "";
+  if (cleaned.length > maxLen) {
+    return `  \x1b[90m"${cleaned.slice(0, maxLen)}..." (${cleaned.length})\x1b[0m`;
+  }
+  return `  \x1b[90m"${cleaned}"\x1b[0m`;
+}
+
 // ---- Help text for --help on each command ----
 
 const COMMAND_HELP: Record<string, string> = {
@@ -500,6 +516,8 @@ const COMMAND_HELP: Record<string, string> = {
     "\x1b[33mOptions:\x1b[0m",
     "  \x1b[32m-l, --long\x1b[0m      Long format: type prefix, role, and name",
     "  \x1b[32m--meta\x1b[0m          Include DOM properties (href, src, id, tag) per element",
+    "  \x1b[32m--text\x1b[0m          Show visible text preview per element (uses innerText)",
+    "  \x1b[32m--textlen N\x1b[0m     Max chars for text preview (default: 80)",
     "  \x1b[32m-r, --recursive\x1b[0m Show nested children (one level deep)",
     "  \x1b[32m-n N\x1b[0m            Limit output to first N entries",
     "  \x1b[32m--offset N\x1b[0m      Skip first N entries (for pagination)",
@@ -563,7 +581,8 @@ const COMMAND_HELP: Record<string, string> = {
     "",
     "Shows AX info (role, type, value) plus real DOM properties:",
     "  tag, href/URL, src, action, id, class, alt, title, placeholder,",
-    "  target, name, text content, and an outer HTML snippet.",
+    "  target, name, text content (textContent), visible text (innerText),",
+    "  and an outer HTML snippet.",
     "",
     "Use 'cd ..' to navigate to a parent element if you need",
     "its properties (e.g. navigate up from a span to its <a> for href).",
@@ -619,16 +638,58 @@ const COMMAND_HELP: Record<string, string> = {
     "  type hello world",
   ].join("\r\n"),
 
+  submit: [
+    "\x1b[1;36msubmit\x1b[0m \u2014 Atomic form submission (focus + clear + type + submit)",
+    "",
+    "\x1b[33mUsage:\x1b[0m submit <input_name> <value> [--submit button_name]",
+    "",
+    "Focuses the input, clears existing value, types the new value,",
+    "then either clicks the submit button or presses Enter.",
+    "",
+    "\x1b[33mExamples:\x1b[0m",
+    "  submit search_input machine learning",
+    "  submit search_input machine learning --submit search_btn",
+  ].join("\r\n"),
+
+  extract_links: [
+    "\x1b[1;36mextract_links\x1b[0m \u2014 Extract all links as [text](url) format",
+    "",
+    "\x1b[33mUsage:\x1b[0m extract_links [element_name] [-n limit]",
+    "",
+    "Recursively finds all link elements and returns their",
+    "display text and URLs in markdown link format.",
+    "",
+    "\x1b[33mExamples:\x1b[0m",
+    "  extract_links              All links under current directory",
+    "  extract_links main -n 20   First 20 links in main section",
+  ].join("\r\n"),
+
+  extract_table: [
+    "\x1b[1;36mextract_table\x1b[0m \u2014 Extract table as markdown or CSV",
+    "",
+    "\x1b[33mUsage:\x1b[0m extract_table <table_name> [--format markdown|csv] [-n limit]",
+    "",
+    "Reads all rows and cells of a table element and returns",
+    "structured output. First row is treated as the header.",
+    "",
+    "\x1b[33mExamples:\x1b[0m",
+    "  extract_table table_1234",
+    "  extract_table table_1234 --format csv",
+    "  extract_table table_1234 -n 10",
+  ].join("\r\n"),
+
   grep: [
     "\x1b[1;36mgrep\x1b[0m \u2014 Search children for matching names",
     "",
     "\x1b[33mUsage:\x1b[0m grep [options] <pattern>",
     "",
     "\x1b[33mOptions:\x1b[0m",
-    "  \x1b[32m-r, --recursive\x1b[0m  Search all descendants recursively",
+    "  \x1b[32m-r, --recursive\x1b[0m  Search all descendants recursively (recommended)",
+    "  \x1b[32m--content\x1b[0m        Also match against visible text content (slower)",
     "  \x1b[32m-n N\x1b[0m             Limit results to first N matches",
     "",
     "Matches against name, role, and value. Case-insensitive.",
+    "Use --content to also match against the element's displayed text.",
   ].join("\r\n"),
 
   find: [
@@ -639,10 +700,14 @@ const COMMAND_HELP: Record<string, string> = {
     "\x1b[33mOptions:\x1b[0m",
     "  \x1b[32m--type ROLE\x1b[0m   Filter by AX role (e.g. --type combobox)",
     "  \x1b[32m--meta\x1b[0m        Include DOM properties (href, src, id, tag) per result",
+    "  \x1b[32m--text\x1b[0m        Show visible text preview per result (uses innerText)",
+    "  \x1b[32m--textlen N\x1b[0m   Max chars for text preview (default: 80)",
+    "  \x1b[32m--content\x1b[0m     Also match against visible text content (slower)",
     "  \x1b[32m-n N\x1b[0m          Limit to first N results",
     "",
     "Searches the entire tree from CWD down. Shows the full path.",
     "Use --meta with --type link to find all URLs on a page.",
+    "Use --content to find elements by their displayed text (e.g. find 'see also' --content).",
   ].join("\r\n"),
 
   tree: [
@@ -652,6 +717,28 @@ const COMMAND_HELP: Record<string, string> = {
     "",
     "\x1b[33mArguments:\x1b[0m",
     "  depth    Max depth to display (default: 2)",
+  ].join("\r\n"),
+
+  read: [
+    "\x1b[1;36mread\x1b[0m \u2014 Structured subtree extraction (tree + content in one call)",
+    "",
+    "\x1b[33mUsage:\x1b[0m read [name] [options]",
+    "",
+    "\x1b[33mOptions:\x1b[0m",
+    "  \x1b[32m-d N\x1b[0m          Max depth to traverse (default: 5)",
+    "  \x1b[32m-n N\x1b[0m          Max total elements to return",
+    "  \x1b[32m--meta\x1b[0m        Include DOM properties (href, src, id) per element",
+    "  \x1b[32m--text\x1b[0m        Include visible text preview per element",
+    "  \x1b[32m--textlen N\x1b[0m   Max chars for text preview (default: 120)",
+    "",
+    "Returns the hierarchy of elements with roles, names, and values.",
+    "Excellent for tables, lists, and nested sections — get structure",
+    "AND content in one call instead of multiple text/cat calls.",
+    "",
+    "\x1b[33mExamples:\x1b[0m",
+    "  read table_1234          Read entire table structure with values",
+    "  read list_5678 --meta    Read list with href/src/id properties",
+    "  read -d 3                Read current directory, 3 levels deep",
   ].join("\r\n"),
 
   whoami: [
@@ -782,7 +869,7 @@ function parseArgs(args: string[]): ParsedArgs {
       flags.add("-r");
     } else if (a === "--count") {
       flags.add("--count");
-    } else if ((a === "-n" || a === "--offset" || a === "--type") && i + 1 < args.length) {
+    } else if ((a === "-n" || a === "-d" || a === "--offset" || a === "--type" || a === "--textlen" || a === "--format" || a === "--submit") && i + 1 < args.length) {
       named[a] = args[++i];
     } else if (a.startsWith("-")) {
       flags.add(a);
@@ -836,6 +923,12 @@ async function executeCommand(raw: string): Promise<string> {
         return await handleType(args);
       case "focus":
         return await handleFocus(args);
+      case "submit":
+        return await handleSubmit(args);
+      case "extract_links":
+        return await handleExtractLinks(args);
+      case "extract_table":
+        return await handleExtractTable(args);
       case "grep":
         return await handleGrep(args);
       case "find":
@@ -848,6 +941,8 @@ async function executeCommand(raw: string): Promise<string> {
         return handleExport(args);
       case "tree":
         return await handleTree(args);
+      case "read":
+        return await handleRead(args);
       case "refresh":
         return await handleRefresh();
       case "debug":
@@ -986,8 +1081,8 @@ async function ensureFreshTree(): Promise<string> {
 
   // Check if current AX node still exists in the new tree
   const currentId = state.axNodeIds[state.axNodeIds.length - 1];
-  if (currentId && !nodeMap.has(currentId)) {
-    // CWD is gone — page navigated, reset DOM portion to root
+  if (!currentId || !nodeMap.has(currentId)) {
+    // CWD is gone — page navigated or node IDs changed, reset to root
     const root = findRootNode(nodeMap);
     const domStart = getDomStartIndex(state.path);
     if (domStart >= 0) {
@@ -1005,7 +1100,8 @@ async function ensureFreshTree(): Promise<string> {
 const COMMANDS = [
   "help", "tabs", "windows", "here", "refresh", "ls", "cd", "pwd", "cat",
   "click", "focus", "type", "grep", "find", "whoami", "env", "export",
-  "tree", "debug", "clear", "navigate", "goto", "open", "connect", "disconnect", "text",
+  "tree", "read", "debug", "clear", "navigate", "goto", "open", "connect", "disconnect", "text",
+  "submit", "extract_links", "extract_table",
 ];
 
 function getCompletions(partial: string, command: string): string[] {
@@ -1083,6 +1179,8 @@ async function handleLs(args: string[]): Promise<string> {
 
   const longFormat = pa.flags.has("-l");
   const showMeta = pa.flags.has("--meta");
+  const showText = pa.flags.has("--text");
+  const textLen = pa.named["--textlen"] ? parseInt(pa.named["--textlen"], 10) : 80;
   const recursive = pa.flags.has("-r");
   const countOnly = pa.flags.has("--count");
   const limit = pa.named["-n"] ? parseInt(pa.named["-n"], 10) : 0;
@@ -1148,12 +1246,19 @@ async function handleLs(args: string[]): Promise<string> {
         if (parts.length > 0) meta = `  \x1b[90m${parts.join(" ")}\x1b[0m`;
       } catch { /* stale node */ }
     }
-    if (longFormat || showMeta) {
+    let textPreview = "";
+    if (showText && child.backendDOMNodeId) {
+      try {
+        const innerText = await cdp.getInnerText(child.backendDOMNodeId);
+        textPreview = formatTextPreview(innerText, textLen);
+      } catch { /* stale node */ }
+    }
+    if (longFormat || showMeta || showText) {
       const role = child.role.padEnd(14);
       const name = child.isDirectory
         ? `\x1b[1;34m${child.name}/\x1b[0m`
         : formatColoredName(child);
-      lines.push(`${tp} ${role} ${name}${meta}`);
+      lines.push(`${tp} ${role} ${name}${textPreview}${meta}`);
     } else {
       if (child.isDirectory) {
         lines.push(`\x1b[1;34m${child.name}/\x1b[0m`);
@@ -1590,15 +1695,31 @@ async function handleCat(args: string[]): Promise<string> {
       // Element may be stale
     }
 
-    // Text content
+    // Text content (textContent — includes hidden elements)
+    let textContent = "";
     try {
-      const text = await cdp.getTextContent(match.backendDOMNodeId);
-      if (text.trim()) {
+      textContent = await cdp.getTextContent(match.backendDOMNodeId);
+      if (textContent.trim()) {
         lines.push(`  \x1b[33mText:\x1b[0m`);
-        const wrapped = text.trim().slice(0, 500);
+        const wrapped = textContent.trim().slice(0, 500);
         lines.push(`  ${wrapped}`);
-        if (text.length > 500) {
-          lines.push(`  \x1b[90m... (${text.length} chars total)\x1b[0m`);
+        if (textContent.length > 500) {
+          lines.push(`  \x1b[90m... (${textContent.length} chars total)\x1b[0m`);
+        }
+      }
+    } catch {
+      // Ignore
+    }
+
+    // Visible text (innerText — respects CSS display/visibility)
+    try {
+      const visibleText = await cdp.getInnerText(match.backendDOMNodeId);
+      if (visibleText.trim() && visibleText.trim() !== textContent.trim()) {
+        lines.push(`  \x1b[33mVisibleText:\x1b[0m`);
+        const wrapped = visibleText.trim().slice(0, 500);
+        lines.push(`  ${wrapped}`);
+        if (visibleText.length > 500) {
+          lines.push(`  \x1b[90m... (${visibleText.length} chars total)\x1b[0m`);
         }
       }
     } catch {
@@ -1750,6 +1871,198 @@ async function handleType(args: string[]): Promise<string> {
   return `\x1b[32m\u2713 Typed ${text.length} characters\x1b[0m`;
 }
 
+// ---- submit (atomic form interaction) ----
+
+async function handleSubmit(args: string[]): Promise<string> {
+  ensureInsideTab();
+  await ensureFreshTree();
+
+  const pa = parseArgs(args);
+  const submitBtnName = pa.named["--submit"];
+
+  if (pa.positional.length < 2) {
+    return "\x1b[31mUsage: submit <input_name> <value> [--submit button_name]\x1b[0m";
+  }
+
+  const inputName = pa.positional[0];
+  const value = pa.positional.slice(1).join(" ");
+  const currentId = getCurrentNodeId();
+
+  // 1. Find and focus the input
+  const input = findChildByName(currentId, inputName, nodeMap);
+  if (!input) {
+    return `\x1b[31msubmit: ${inputName}: No such element\x1b[0m`;
+  }
+  if (!input.backendDOMNodeId) {
+    return `\x1b[31msubmit: ${inputName}: No DOM node backing\x1b[0m`;
+  }
+  await cdp.focusByBackendNodeId(input.backendDOMNodeId);
+
+  // 2. Clear existing value (select all + delete via JS)
+  await cdp.send("Runtime.callFunctionOn", {
+    objectId: (await cdp.send<{ object: { objectId: string } }>("DOM.resolveNode", { backendNodeId: input.backendDOMNodeId })).object.objectId,
+    functionDeclaration: `function() { this.value = ''; this.dispatchEvent(new Event('input', { bubbles: true })); }`,
+    returnByValue: true,
+  });
+
+  // 3. Type the value
+  await cdp.typeText(value);
+
+  // 4. Submit: click button or press Enter
+  if (submitBtnName) {
+    const btn = findChildByName(currentId, submitBtnName, nodeMap);
+    if (btn && btn.backendDOMNodeId) {
+      try {
+        await cdp.clickByBackendNodeId(btn.backendDOMNodeId);
+      } catch {
+        try {
+          await cdp.clickByCoordinates(btn.backendDOMNodeId);
+        } catch {
+          // Fallback to Enter
+          await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", text: "\r" });
+          await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter" });
+        }
+      }
+    } else {
+      // Button not found, press Enter
+      await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", text: "\r" });
+      await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter" });
+    }
+  } else {
+    // No submit button specified, press Enter
+    await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", text: "\r" });
+    await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter" });
+  }
+
+  treeStale = true;
+  const method = submitBtnName ? `clicked ${submitBtnName}` : "pressed Enter";
+  return `\x1b[32m\u2713 Submitted: typed "${value}" into ${inputName}, then ${method}\x1b[0m\r\n\x1b[90m(tree will auto-refresh on next command)\x1b[0m`;
+}
+
+// ---- extract_links ----
+
+async function handleExtractLinks(args: string[]): Promise<string> {
+  ensureInsideTab();
+  await ensureFreshTree();
+
+  const pa = parseArgs(args);
+  const limit = pa.named["-n"] ? parseInt(pa.named["-n"], 10) : 0;
+
+  let targetId: string;
+  if (pa.positional.length > 0) {
+    const name = pa.positional[0];
+    const currentId = getCurrentNodeId();
+    const match = findChildByName(currentId, name, nodeMap);
+    if (!match) return `\x1b[31mextract_links: ${name}: No such element\x1b[0m`;
+    targetId = match.axNodeId;
+  } else {
+    targetId = getCurrentNodeId();
+  }
+
+  // Collect all link nodes recursively
+  const results: Array<{ path: string; node: VFSNode }> = [];
+  await findRecursive(targetId, "", "", "link", results, new Set(), limit || 200);
+
+  if (results.length === 0) return "\x1b[33m(no links found)\x1b[0m";
+
+  const lines: string[] = [];
+  for (let i = 0; i < results.length; i++) {
+    if (limit > 0 && i >= limit) break;
+    const node = results[i].node;
+    let displayText = node.value || node.name.replace(/_/g, " ");
+    let href = "";
+
+    if (node.backendDOMNodeId) {
+      try {
+        const props = await cdp.getElementProperties(node.backendDOMNodeId);
+        if (props.href) href = props.href;
+        // Use visible text for better display
+        const text = await cdp.getInnerText(node.backendDOMNodeId);
+        if (text.trim()) displayText = text.trim().replace(/\s+/g, " ");
+      } catch { /* stale node */ }
+    }
+
+    if (href) {
+      lines.push(`${i + 1}. [${displayText}](${href})`);
+    } else {
+      lines.push(`${i + 1}. ${displayText} (no href)`);
+    }
+  }
+
+  return lines.join("\r\n");
+}
+
+// ---- extract_table ----
+
+async function handleExtractTable(args: string[]): Promise<string> {
+  ensureInsideTab();
+  await ensureFreshTree();
+
+  const pa = parseArgs(args);
+  const format = pa.named["--format"] || "markdown";
+  const limit = pa.named["-n"] ? parseInt(pa.named["-n"], 10) : 0;
+
+  if (pa.positional.length === 0) {
+    return "\x1b[31mUsage: extract_table <table_name> [--format markdown|csv] [-n limit]\x1b[0m";
+  }
+
+  const tableName = pa.positional[0];
+  const currentId = getCurrentNodeId();
+  const tableNode = findChildByName(currentId, tableName, nodeMap);
+  if (!tableNode) return `\x1b[31mextract_table: ${tableName}: No such element\x1b[0m`;
+
+  // Walk table structure: table -> rowgroup/row -> row -> cell
+  const rows: string[][] = [];
+  const tableChildren = getChildVFSNodes(tableNode.axNodeId, nodeMap);
+
+  for (const child of tableChildren) {
+    let rowNodes: VFSNode[] = [];
+
+    if (child.role === "row") {
+      rowNodes = [child];
+    } else if (child.role === "rowgroup") {
+      // thead, tbody, tfoot -> contains rows
+      rowNodes = getChildVFSNodes(child.axNodeId, nodeMap).filter(r => r.role === "row");
+    }
+
+    for (const row of rowNodes) {
+      if (limit > 0 && rows.length >= limit) break;
+      const cells = getChildVFSNodes(row.axNodeId, nodeMap);
+      const cellTexts: string[] = [];
+
+      for (const cell of cells) {
+        if (cell.backendDOMNodeId) {
+          try {
+            const text = await cdp.getInnerText(cell.backendDOMNodeId);
+            cellTexts.push(text.trim().replace(/\s+/g, " "));
+          } catch {
+            cellTexts.push(cell.value || cell.name);
+          }
+        } else {
+          cellTexts.push(cell.value || cell.name);
+        }
+      }
+      rows.push(cellTexts);
+    }
+  }
+
+  if (rows.length === 0) return "\x1b[33m(no rows found in table)\x1b[0m";
+
+  if (format === "csv") {
+    return rows.map(r => r.map(c => `"${c.replace(/"/g, '""')}"`).join(",")).join("\r\n");
+  }
+
+  // Markdown format — first row as header
+  const header = rows[0];
+  const separator = header.map(() => "---");
+  const lines = [
+    "| " + header.join(" | ") + " |",
+    "| " + separator.join(" | ") + " |",
+    ...rows.slice(1).map(r => "| " + r.join(" | ") + " |"),
+  ];
+  return lines.join("\r\n");
+}
+
 // ---- grep ----
 
 async function handleGrep(args: string[]): Promise<string> {
@@ -1758,6 +2071,7 @@ async function handleGrep(args: string[]): Promise<string> {
 
   const pa = parseArgs(args);
   const recursive = pa.flags.has("-r");
+  const contentMatch = pa.flags.has("--content");
   const limit = pa.named["-n"] ? parseInt(pa.named["-n"], 10) : 0;
 
   if (pa.positional.length === 0) {
@@ -1775,18 +2089,34 @@ async function handleGrep(args: string[]): Promise<string> {
     candidates = getChildVFSNodes(currentId, nodeMap);
   }
 
-  let matches = candidates.filter(
-    (c) =>
+  const matches: VFSNode[] = [];
+  for (const c of candidates) {
+    if (limit > 0 && matches.length >= limit) break;
+
+    const axMatch =
       c.name.toLowerCase().includes(pattern) ||
       c.role.toLowerCase().includes(pattern) ||
-      (c.value && c.value.toLowerCase().includes(pattern))
-  );
+      (c.value && c.value.toLowerCase().includes(pattern));
+
+    if (axMatch) {
+      matches.push(c);
+      continue;
+    }
+
+    // Slow path: match against visible text content (only if --content flag)
+    if (contentMatch && c.backendDOMNodeId) {
+      try {
+        const text = await cdp.getInnerText(c.backendDOMNodeId);
+        if (text.toLowerCase().includes(pattern)) {
+          matches.push(c);
+        }
+      } catch { /* stale node */ }
+    }
+  }
 
   if (matches.length === 0) {
     return `\x1b[33mNo matches for '${pattern}'\x1b[0m`;
   }
-
-  if (limit > 0) matches = matches.slice(0, limit);
 
   return matches
     .map((m) => {
@@ -1806,6 +2136,9 @@ async function handleFind(args: string[]): Promise<string> {
   const typeFilter = pa.named["--type"]?.toLowerCase();
   const limit = pa.named["-n"] ? parseInt(pa.named["-n"], 10) : 0;
   const showMeta = pa.flags.has("--meta");
+  const showText = pa.flags.has("--text");
+  const contentMatch = pa.flags.has("--content");
+  const textLen = pa.named["--textlen"] ? parseInt(pa.named["--textlen"], 10) : 80;
   const pattern = pa.positional[0]?.toLowerCase() ?? "";
 
   if (!pattern && !typeFilter) {
@@ -1814,7 +2147,7 @@ async function handleFind(args: string[]): Promise<string> {
 
   const currentId = getCurrentNodeId();
   const results: Array<{ path: string; node: VFSNode }> = [];
-  findRecursive(currentId, "", pattern, typeFilter, results, new Set(), limit);
+  await findRecursive(currentId, "", pattern, typeFilter, results, new Set(), limit, contentMatch);
 
   if (results.length === 0) {
     const desc = typeFilter ? `type '${typeFilter}'` : `'${pattern}'`;
@@ -1839,20 +2172,28 @@ async function handleFind(args: string[]): Promise<string> {
         if (parts.length > 0) meta = `  \x1b[90m${parts.join(" ")}\x1b[0m`;
       } catch { /* stale node */ }
     }
-    lines.push(`${tp} \x1b[90m${r.path}\x1b[0m${coloredName} \x1b[90m(${r.node.role})\x1b[0m${meta}`);
+    let textPreview = "";
+    if (showText && r.node.backendDOMNodeId) {
+      try {
+        const innerText = await cdp.getInnerText(r.node.backendDOMNodeId);
+        textPreview = formatTextPreview(innerText, textLen);
+      } catch { /* stale node */ }
+    }
+    lines.push(`${tp} \x1b[90m${r.path}\x1b[0m${coloredName} \x1b[90m(${r.node.role})\x1b[0m${textPreview}${meta}`);
   }
   return lines.join("\r\n");
 }
 
-function findRecursive(
+async function findRecursive(
   parentId: string,
   pathPrefix: string,
   pattern: string,
   typeFilter: string | undefined,
   results: Array<{ path: string; node: VFSNode }>,
   visited: Set<string>,
-  limit: number
-): void {
+  limit: number,
+  contentMatch: boolean = false
+): Promise<void> {
   if (visited.has(parentId)) return;
   if (limit > 0 && results.length >= limit) return;
   visited.add(parentId);
@@ -1862,10 +2203,18 @@ function findRecursive(
   for (const child of children) {
     if (limit > 0 && results.length >= limit) return;
 
-    const matchesPattern = !pattern ||
+    let matchesPattern = !pattern ||
       child.name.toLowerCase().includes(pattern) ||
       child.role.toLowerCase().includes(pattern) ||
       (child.value && child.value.toLowerCase().includes(pattern));
+
+    // Slow path: match against visible text content (only if --content flag)
+    if (!matchesPattern && contentMatch && pattern && child.backendDOMNodeId) {
+      try {
+        const text = await cdp.getInnerText(child.backendDOMNodeId);
+        matchesPattern = text.toLowerCase().includes(pattern);
+      } catch { /* stale node */ }
+    }
 
     const matchesType = !typeFilter || child.role.toLowerCase() === typeFilter;
 
@@ -1874,14 +2223,15 @@ function findRecursive(
     }
 
     if (child.isDirectory) {
-      findRecursive(
+      await findRecursive(
         child.axNodeId,
         pathPrefix + child.name + "/",
         pattern,
         typeFilter,
         results,
         visited,
-        limit
+        limit,
+        contentMatch
       );
     }
   }
@@ -1952,6 +2302,110 @@ function buildTreeLines(
       buildTreeLines(child.axNodeId, prefix + childPrefix, maxDepth, depth + 1, lines);
     }
   });
+}
+
+// ---- read (structured subtree extraction) ----
+
+async function handleRead(args: string[]): Promise<string> {
+  ensureInsideTab();
+  await ensureFreshTree();
+
+  const pa = parseArgs(args);
+  const maxDepth = pa.named["-d"] ? parseInt(pa.named["-d"], 10) : 5;
+  const showMeta = pa.flags.has("--meta");
+  const showText = pa.flags.has("--text");
+  const textLen = pa.named["--textlen"] ? parseInt(pa.named["--textlen"], 10) : 120;
+  const limit = pa.named["-n"] ? parseInt(pa.named["-n"], 10) : 0;
+
+  let targetId: string;
+  let targetName: string;
+
+  if (pa.positional.length > 0) {
+    const name = pa.positional[0];
+    const currentId = getCurrentNodeId();
+    const match = findChildByName(currentId, name, nodeMap);
+    if (!match) {
+      return `\x1b[31mread: ${name}: No such file or directory\x1b[0m`;
+    }
+    targetId = match.axNodeId;
+    targetName = match.name;
+  } else {
+    targetId = getCurrentNodeId();
+    const node = nodeMap.get(targetId);
+    targetName = node ? generateNodeName(node) : "/";
+  }
+
+  const lines: string[] = [];
+  const counter = { count: 0 };
+
+  // Root line
+  const rootNode = nodeMap.get(targetId);
+  const rootRole = rootNode?.role?.value ?? "group";
+  lines.push(`${targetName} [${rootRole}]`);
+
+  await buildReadLines(targetId, "  ", maxDepth, 0, lines, showMeta, showText, textLen, limit, counter);
+
+  return lines.join("\r\n");
+}
+
+async function buildReadLines(
+  parentId: string,
+  indent: string,
+  maxDepth: number,
+  depth: number,
+  lines: string[],
+  showMeta: boolean,
+  showText: boolean,
+  textLen: number,
+  limit: number,
+  counter: { count: number }
+): Promise<void> {
+  if (depth >= maxDepth) return;
+  if (limit > 0 && counter.count >= limit) return;
+
+  const children = getChildVFSNodes(parentId, nodeMap);
+
+  for (const child of children) {
+    if (limit > 0 && counter.count >= limit) return;
+    counter.count++;
+
+    // Format: indent + name [role] "value"
+    let line = `${indent}${child.name} [${child.role}]`;
+    if (child.value) {
+      const val = child.value.length > textLen ? child.value.slice(0, textLen) + "..." : child.value;
+      line += ` "${val}"`;
+    }
+
+    // Optionally add meta (href, src, id)
+    if (showMeta && child.backendDOMNodeId) {
+      try {
+        const props = await cdp.getElementProperties(child.backendDOMNodeId);
+        const parts: string[] = [];
+        if (props.href) parts.push(`href=${props.href}`);
+        if (props.src) parts.push(`src=${props.src}`);
+        if (props.id) parts.push(`id=${props.id}`);
+        if (parts.length > 0) line += `  {${parts.join(", ")}}`;
+      } catch { /* stale node */ }
+    }
+
+    // Optionally add text preview
+    if (showText && child.backendDOMNodeId) {
+      try {
+        const text = await cdp.getInnerText(child.backendDOMNodeId);
+        const cleaned = text.trim().replace(/\s+/g, " ");
+        if (cleaned) {
+          const preview = cleaned.length > textLen ? cleaned.slice(0, textLen) + "..." : cleaned;
+          line += `  \x1b[90m"${preview}"\x1b[0m`;
+        }
+      } catch { /* stale node */ }
+    }
+
+    lines.push(line);
+
+    if (child.isDirectory) {
+      await buildReadLines(child.axNodeId, indent + "  ", maxDepth, depth + 1, lines, showMeta, showText, textLen, limit, counter);
+    }
+  }
 }
 
 // ---- whoami ----

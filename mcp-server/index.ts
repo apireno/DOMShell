@@ -303,10 +303,12 @@ BROWSER HIERARCHY:
 - "cd .." from DOM root exits to browser level.
 
 READING ELEMENT METADATA:
-- domshell_cat shows full info for any element: AX role, DOM tag, href (for links), src (for images), id, class, text content, and an outerHTML snippet.
+- domshell_cat shows full info for any element: AX role, DOM tag, href (for links), src (for images), id, class, text content (textContent), visible text (innerText — only rendered text, respects CSS visibility), and an outerHTML snippet.
 - If a child element (like a span) doesn't have the property you need (like href), navigate up with "cd .." to the parent element (like the <a> tag) and cat that instead.
 - domshell_ls with --meta option shows href/src/id inline for each element in the listing.
+- domshell_ls with --text option shows visible text preview (innerText) per element. Combine with --meta: "ls --meta --text".
 - domshell_find with --meta option shows href/src/id inline for each search result. Use "find --type link --meta" to get all URLs on a page.
+- domshell_find with --text option shows visible text preview per result. Use "find --type link --meta --text" to get all URLs with their link text.
 
 IMPORTANT TIPS:
 - Element names are human-readable (e.g. "Sign_in_btn", "Search_input") not CSS selectors.
@@ -314,6 +316,20 @@ IMPORTANT TIPS:
 - Use domshell_find --type link --meta to extract all URLs from a page.
 - Directories (navigation/, main/) are containers you cd into. Files (submit_btn, logo_link) are leaf elements you cat or click.
 - The AXTree auto-refreshes after clicks/navigation — no manual refresh needed.
+
+EFFICIENT PATTERNS:
+1. Scoped Extraction: open URL → cd main/article → find --type heading (locate section) → cd section → text (content) + find --type link --meta (links)
+2. Table Reading: find --type table → text table_element (reads ALL rows at once). For structured data, read the whole table, don't read row-by-row.
+3. Section Discovery: grep "section_name" (recursive: true) OR find "section_name". NOT ls --offset pagination (too many calls).
+4. Link Extraction: cd into the container with links → find --type link --meta. Returns every link with its href in one call.
+5. Form Interaction: find --type textbox → focus input → type "query" → click submit_button. If page doesn't navigate, use domshell_navigate as fallback.
+
+ANTI-PATTERNS (avoid these):
+- Do NOT cd into an element just to read its text — use text element_name instead (saves a cd + cd .. round trip)
+- Do NOT use ls --offset pagination to search for a section — use find or grep with recursive: true
+- Do NOT call text on individual rows/items — text the parent container instead (one call replaces N)
+- Do NOT make multiple cat calls for content — use text for bulk content, find --meta for properties
+- Do NOT cd into a leaf element (links, buttons) — use cat element_name or text element_name instead
 
 Note: Use --no-confirm when starting the server to skip interactive confirmation prompts for write actions.`;
 
@@ -345,8 +361,8 @@ function createMcpServer(): McpServer {
 
   server.tool(
     "domshell_ls",
-    "List children of the current directory. In the DOM tree: shows elements as files and directories. At the browser level (~): shows tabs/windows. Supports flags: -l (long format), --meta (show DOM properties like href/src/id inline), -r (recursive), -n N (limit), --offset N, --type ROLE, --count.",
-    { options: z.string().optional().describe("Flags and options, e.g. '-l', '-n 10', '--type button', or '~/tabs/' for tab listing") },
+    "List children of the current directory. In the DOM tree: shows elements as files and directories. At the browser level (~): shows tabs/windows.\n\nFlags:\n  -l              Long format (more detail per element)\n  --meta          Show DOM properties (href, src, id) inline — great for extracting links\n  --text          Show visible text preview per element\n  -r              Recursive listing\n  -n N            Limit to N results\n  --offset N      Skip first N children (pagination)\n  --type ROLE     Filter by AX role (link, heading, button, etc.)\n  --count         Just count children\n  --textlen N     Max chars for text preview (default 80)\n\nBest for: viewing immediate children of the current element.\nNOT recommended for: searching deep in the tree — use domshell_find or domshell_grep instead.\n\nWhen to use --meta: after cd'ing into a container with links, ls --meta shows every child's href/src/id. Combined with --type link, this extracts URLs efficiently.",
+    { options: z.string().optional().describe("Flags and options, e.g. '-l', '-n 10', '--type button', '--text', '--meta --text', or '~/tabs/' for tab listing") },
     async ({ options }) => ({
       content: [{ type: "text", text: await executeWithSecurity(`ls ${options ?? ""}`.trim()) }],
     })
@@ -354,7 +370,7 @@ function createMcpServer(): McpServer {
 
   server.tool(
     "domshell_cd",
-    "Change directory. '~' and '/' go to browser root. '%here%' expands to the focused tab via its window path — use 'cd %here%' to enter the active tab, 'cd %here%/..' for its window, 'cd %here%/main' to enter and navigate. DOM paths: 'main/form', '..'. Browser paths: '~/tabs/<id>' (switch by ID), '~/tabs/<pattern>' (switch by title/URL match), '~/windows/<id>' (window's tabs).",
+    "Change directory — sets your scope for all subsequent commands (ls, find, grep, text all operate relative to current directory).\n\nPaths: 'main/form', '..', '~' (browser root), '~/tabs/<id>', '~/tabs/<pattern>', '%here%' (focused tab).\n\nWhen to cd:\n  - cd into a SECTION (article, main, sidebar) to scope find/grep/ls to that area\n  - cd into ~/tabs/<id> to switch between tabs\n  - cd .. to go up when done with a section\n\nWhen NOT to cd:\n  - To read a child's text: use 'domshell_text' with the name parameter instead (saves a cd + cd .. round trip)\n  - To inspect a child: use 'domshell_cat' with the name parameter instead\n  - To extract links: domshell_find --type link --meta works from the current directory",
     { path: z.string().describe("Path: DOM path, '~', '~/tabs/<id>', '~/windows/<id>', '%here%', '..', '/'") },
     async ({ path }) => ({
       content: [{ type: "text", text: await executeWithSecurity(`cd ${path}`) }],
@@ -372,7 +388,7 @@ function createMcpServer(): McpServer {
 
   server.tool(
     "domshell_cat",
-    "Read detailed metadata about a DOM element: role, type, AX ID, DOM backend ID, value, child count, and text content.",
+    "Read detailed metadata about a DOM element: role, type, AX ID, DOM backend ID, value, child count, text content (textContent), visible text (innerText — only rendered text, respects CSS visibility), and outerHTML snippet.",
     { name: z.string().describe("Name of the element to inspect") },
     async ({ name }) => ({
       content: [{ type: "text", text: await executeWithSecurity(`cat ${name}`) }],
@@ -381,35 +397,43 @@ function createMcpServer(): McpServer {
 
   server.tool(
     "domshell_find",
-    "Deep recursive search across the entire DOM tree from the current directory. Returns full paths to matching elements. Use --type to filter by role, --meta to include DOM properties (href, src, id) inline. Example: find --type link --meta to get all URLs on a page.",
+    "Deep recursive search from the CURRENT DIRECTORY downward. Scope matters: cd into a section first, then find, to get only that section's elements (fewer, more relevant results). Returns full paths to matching elements.\n\nKey flags:\n  --type ROLE   Filter by AX role (link, button, heading, textbox, table, list, etc.)\n  --meta        Include DOM properties (href, src, id) inline — essential for extracting URLs\n  --text        Show visible text preview per result\n\nCommon patterns:\n  find --type link --meta              All links with URLs under current directory\n  find --type heading                  All section headings (to locate 'See Also', 'References', etc.)\n  find --type table                    Find tables for data extraction\n  find 'paragraph'                     Find paragraph elements by name pattern\n\nEfficiency tip: cd into the container you care about FIRST, then find within it. This avoids sidebar/nav/footer noise in results. Use 'text element_name' on find results to read their content without cd'ing.",
     {
       pattern: z.string().optional().describe("Search pattern (matches name, role, value)"),
       type: z.string().optional().describe("Filter by AX role (e.g. 'button', 'link', 'textbox', 'combobox')"),
       limit: z.number().optional().describe("Maximum number of results"),
       meta: z.boolean().optional().describe("Include DOM properties (href, src, id, tag) per result"),
+      text: z.boolean().optional().describe("Show visible text preview per result (uses innerText, respects CSS visibility)"),
+      textlen: z.number().optional().describe("Maximum characters for text preview (default: 80)"),
+      content: z.boolean().optional().describe("Also match against visible text content of elements (slower but finds elements by their displayed text, e.g. find a heading whose text says 'See also')"),
     },
-    async ({ pattern, type, limit, meta }) => {
+    async ({ pattern, type, limit, meta, text, textlen, content }) => {
       let cmd = "find";
       if (pattern) cmd += ` ${pattern}`;
       if (type) cmd += ` --type ${type}`;
       if (limit) cmd += ` -n ${limit}`;
       if (meta) cmd += ` --meta`;
+      if (text) cmd += ` --text`;
+      if (textlen) cmd += ` --textlen ${textlen}`;
+      if (content) cmd += ` --content`;
       return { content: [{ type: "text", text: await executeWithSecurity(cmd) }] };
     }
   );
 
   server.tool(
     "domshell_grep",
-    "Search children of the current directory for elements matching a pattern. Matches against name, role, and value. Case-insensitive.",
+    "Search for elements matching a pattern. Matches against name, role, and value. Case-insensitive.\n\nBy default, searches only IMMEDIATE children. Use recursive: true to search all descendants — this is almost always what you want for finding sections or elements by name.\n\nCommon patterns:\n  grep 'see_also' (recursive: true)      Find a section by name anywhere below\n  grep 'heading' (recursive: true)        Find all headings in the subtree\n  grep 'button'                           Find buttons among immediate children",
     {
       pattern: z.string().describe("Search pattern"),
       recursive: z.boolean().optional().describe("Search all descendants recursively"),
       limit: z.number().optional().describe("Maximum number of results"),
+      content: z.boolean().optional().describe("Also match against visible text content of elements (slower but finds elements by their displayed text)"),
     },
-    async ({ pattern, recursive, limit }) => {
+    async ({ pattern, recursive, limit, content }) => {
       let cmd = "grep";
       if (recursive) cmd += " -r";
       if (limit) cmd += ` -n ${limit}`;
+      if (content) cmd += ` --content`;
       cmd += ` ${pattern}`;
       return { content: [{ type: "text", text: await executeWithSecurity(cmd) }] };
     }
@@ -426,7 +450,7 @@ function createMcpServer(): McpServer {
 
   server.tool(
     "domshell_text",
-    "Extract all text content from the current directory or a named child, including all descendants. Returns the full textContent in a single call — much more efficient than multiple domshell_cat calls for reading articles or page content.",
+    "Extract ALL text content from the current directory or a named child, including every descendant. Returns full textContent in a single call.\n\nThe name parameter lets you read any child without cd'ing into it first:\n  text paragraph_2994      Read a paragraph's text without cd'ing into it\n  text table_1234          Read an ENTIRE table (all rows, all cells) in one call\n  text list_5678           Read all list items at once\n  text                     Read everything under current directory\n\nEfficiency tip: call text on the HIGHEST container that has the content you need.\n  - Need a table? text on the table element, not individual rows.\n  - Need a section? text on the section container, not each paragraph.\n  - Need article body? cd into article/main, then text with no args.\n\nOne text call on a parent replaces N calls on its children.",
     {
       name: z.string().optional().describe("Name of a child element to extract text from (default: current directory)"),
       limit: z.number().optional().describe("Maximum characters to return"),
@@ -440,6 +464,29 @@ function createMcpServer(): McpServer {
   );
 
   server.tool(
+    "domshell_read",
+    "Structured subtree extraction — returns the hierarchy of elements under the current directory or a named child, with roles, names, and values in one call. Think of it as 'tree' + 'cat' combined: you get the structure AND the content.\n\nExcellent for tables, lists, and nested sections. A single read on a table returns all rows and cells with their roles and values, replacing N separate text calls.\n\nFlags:\n  --meta     Include DOM properties (href, src, id) per element\n  --text     Include visible text preview per element\n  -d N       Max depth to traverse (default 5)\n  -n N       Max total elements to return\n\nExamples:\n  read table_1234          Get full table structure with values\n  read list_5678 --meta    Get list with href/src/id properties\n  read -d 3                Current directory, 3 levels deep",
+    {
+      name: z.string().optional().describe("Name of a child element to read (default: current directory)"),
+      depth: z.number().optional().describe("Maximum depth to traverse (default: 5)"),
+      limit: z.number().optional().describe("Maximum total elements to return"),
+      meta: z.boolean().optional().describe("Include DOM properties (href, src, id) per element"),
+      text: z.boolean().optional().describe("Include visible text preview per element"),
+      textlen: z.number().optional().describe("Max chars for text preview (default: 120)"),
+    },
+    async ({ name, depth, limit, meta, text, textlen }) => {
+      let cmd = "read";
+      if (name) cmd += ` ${name}`;
+      if (depth) cmd += ` -d ${depth}`;
+      if (limit) cmd += ` -n ${limit}`;
+      if (meta) cmd += ` --meta`;
+      if (text) cmd += ` --text`;
+      if (textlen) cmd += ` --textlen ${textlen}`;
+      return { content: [{ type: "text", text: await executeWithSecurity(cmd) }] };
+    }
+  );
+
+  server.tool(
     "domshell_refresh",
     "Force re-fetch the Accessibility Tree. Use after page navigation or significant DOM changes. Note: the tree also auto-refreshes when changes are detected.",
     {},
@@ -448,12 +495,43 @@ function createMcpServer(): McpServer {
     })
   );
 
+  server.tool(
+    "domshell_extract_links",
+    "Extract all links under the current directory or a named child as a clean numbered list in [text](url) format. Purpose-built for link extraction — returns display text and URLs in one call.\n\nExamples:\n  extract_links              All links under current directory\n  extract_links main -n 20   First 20 links in 'main' section",
+    {
+      name: z.string().optional().describe("Name of a child element to extract links from (default: current directory)"),
+      limit: z.number().optional().describe("Maximum number of links to return"),
+    },
+    async ({ name, limit }) => {
+      let cmd = "extract_links";
+      if (name) cmd += ` ${name}`;
+      if (limit) cmd += ` -n ${limit}`;
+      return { content: [{ type: "text", text: await executeWithSecurity(cmd) }] };
+    }
+  );
+
+  server.tool(
+    "domshell_extract_table",
+    "Extract a table element as structured markdown or CSV. Reads all rows and cells, returns formatted output. First row is treated as the header.\n\nExamples:\n  extract_table table_1234              Markdown table\n  extract_table table_1234 --format csv CSV format\n  extract_table table_1234 -n 10        First 10 rows only",
+    {
+      name: z.string().describe("Name of the table element to extract"),
+      format: z.enum(["markdown", "csv"]).optional().describe("Output format (default: markdown)"),
+      limit: z.number().optional().describe("Maximum number of rows to return"),
+    },
+    async ({ name, format, limit }) => {
+      let cmd = `extract_table ${name}`;
+      if (format) cmd += ` --format ${format}`;
+      if (limit) cmd += ` -n ${limit}`;
+      return { content: [{ type: "text", text: await executeWithSecurity(cmd) }] };
+    }
+  );
+
   // -- Write tier tools (require --allow-write) --
 
   if (ALLOW_WRITE) {
     server.tool(
       "domshell_click",
-      "Click a DOM element. This may trigger navigation, form submission, or other page changes. The DOM tree will auto-refresh on the next command.",
+      "Click a DOM element. May trigger navigation, form submission, or page changes. The DOM tree auto-refreshes on the next command.\n\nAfter clicking: use domshell_ls or domshell_pwd to verify the page actually changed. Some clicks (like search buttons) may need a domshell_refresh to see updated content. If clicking a search/submit button doesn't navigate, try using domshell_navigate as a fallback.",
       { name: z.string().describe("Name of the element to click") },
       async ({ name }) => ({
         content: [{ type: "text", text: await executeWithSecurity(`click ${name}`) }],
@@ -471,7 +549,7 @@ function createMcpServer(): McpServer {
 
     server.tool(
       "domshell_type",
-      "Type text into the currently focused element. Use domshell_focus first to target an input field.",
+      "Type text into the currently focused element. Use domshell_focus first to target an input field.\n\nFor search forms: after typing, you may need to either:\n  1. click the submit/search button, OR\n  2. type '\\n' to simulate pressing Enter\n\nIf the page doesn't navigate after form submission, use domshell_navigate as a fallback to go to the expected URL directly.",
       { text: z.string().describe("Text to type into the focused element") },
       async ({ text }) => ({
         content: [{ type: "text", text: await executeWithSecurity(`type ${text}`) }],
@@ -489,11 +567,26 @@ function createMcpServer(): McpServer {
 
     server.tool(
       "domshell_open",
-      "Open a URL in a new browser tab and enter it (path becomes ~/tabs/<id>). Automatically builds the accessibility tree after the page loads. Works from any location. Use this when you want to open a new tab rather than navigating the current one.",
+      "Open a URL in a new tab and enter it (path becomes ~/tabs/<id>). Automatically builds the accessibility tree after page loads. Works from any location.\n\nAfter opening a page, a typical extraction workflow is:\n  1. open URL\n  2. find the section you need (find --type heading, or grep section_name with recursive: true)\n  3. cd into the container\n  4. text (for content) or find --type link --meta (for links)",
       { url: z.string().describe("URL to open in a new tab (e.g. 'https://example.com' or 'example.com')") },
       async ({ url }) => ({
         content: [{ type: "text", text: await executeWithSecurity(`open ${url}`) }],
       })
+    );
+
+    server.tool(
+      "domshell_submit",
+      "Atomic form submission — focuses input, clears existing value, types new value, then submits (clicks button or presses Enter). Replaces the 3-step focus → type → click pattern in one reliable call.\n\nExamples:\n  submit search_input 'machine learning'                   Type and press Enter\n  submit search_input 'machine learning' --submit search_btn  Type and click button",
+      {
+        input: z.string().describe("Name of the input element to type into"),
+        value: z.string().describe("Text value to type into the input"),
+        submit_button: z.string().optional().describe("Name of submit button to click (default: press Enter)"),
+      },
+      async ({ input, value, submit_button }) => {
+        let cmd = `submit ${input} ${value}`;
+        if (submit_button) cmd += ` --submit ${submit_button}`;
+        return { content: [{ type: "text", text: await executeWithSecurity(cmd) }] };
+      }
     );
   }
 

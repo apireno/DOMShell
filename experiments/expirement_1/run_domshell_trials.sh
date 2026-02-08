@@ -5,22 +5,22 @@
 # Prerequisites:
 #   1. Chrome open with DOMShell extension loaded and connected
 #   2. MCP server already running in a separate terminal:
-#      cd ~/repos/DOMShell/mcp-server && npx tsx index.ts --allow-write --no-confirm --token test-token-123
+#      cd ~/repos/DOMShell/mcp-server && npx tsx index.ts --allow-write --no-confirm --token 52642f3f8e93d6be3e59aa90aa3526d06392a2cb5493aaf4
 #   3. claude CLI installed and authenticated
 #   4. .mcp.json in this directory uses proxy.ts → connects to running server on port 3001
 
-RESULTS_DIR="$(cd "$(dirname "$0")" && pwd)/as_results"
+RESULTS_DIR="$(cd "$(dirname "$0")" && pwd)/results"
 mkdir -p "$RESULTS_DIR"
 TIMEOUT_SECS=300  # 5 minutes per trial
 
 # ── Quick connectivity check ────────────────────────────────────────────────
 
 echo "Checking MCP server on port 3001..."
-if ! curl -sf http://127.0.0.1:3001/mcp >/dev/null 2>&1; then
+if ! (echo > /dev/tcp/127.0.0.1/3001) 2>/dev/null; then
   echo ""
   echo "ERROR: MCP server not reachable on port 3001."
   echo "Start it first in a separate terminal:"
-  echo "  cd ~/repos/DOMShell/mcp-server && npx tsx index.ts --allow-write --no-confirm --token test-token-123"
+  echo "  cd ~/repos/DOMShell/mcp-server && npx tsx index.ts --allow-write --no-confirm --token 52642f3f8e93d6be3e59aa90aa3526d06392a2cb5493aaf4"
   echo ""
   exit 1
 fi

@@ -212,6 +212,46 @@ export class CDPClient {
   }
 
   /**
+   * Get useful DOM properties for an element (tag, href, src, id, class, outerHTML snippet).
+   */
+  async getElementProperties(backendDOMNodeId: number): Promise<Record<string, string>> {
+    const { object } = await this.send<{ object: { objectId: string } }>(
+      "DOM.resolveNode",
+      { backendNodeId: backendDOMNodeId }
+    );
+
+    const { result } = await this.send<{ result: { value: Record<string, string> } }>(
+      "Runtime.callFunctionOn",
+      {
+        objectId: object.objectId,
+        functionDeclaration: `function() {
+          var o = {};
+          if (this.tagName) o.tag = this.tagName.toLowerCase();
+          if (this.href) o.href = this.href;
+          if (this.src) o.src = this.src;
+          if (this.action) o.action = this.action;
+          if (this.id) o.id = this.id;
+          if (this.className && typeof this.className === 'string') o.class = this.className;
+          if (this.type) o.type = this.type;
+          if (this.name) o.name = this.name;
+          if (this.placeholder) o.placeholder = this.placeholder;
+          if (this.alt) o.alt = this.alt;
+          if (this.title) o.title = this.title;
+          if (this.target) o.target = this.target;
+          if (this.rel) o.rel = this.rel;
+          var html = this.outerHTML || '';
+          if (html.length > 300) html = html.slice(0, 300) + '...';
+          if (html) o.outerHTML = html;
+          return o;
+        }`,
+        returnByValue: true,
+      }
+    );
+
+    return result.value;
+  }
+
+  /**
    * Get the current page URL.
    */
   async getPageUrl(): Promise<string> {

@@ -157,6 +157,11 @@ agent@shell:~$ ls --type link
 skip_to_content_link
 logo_link
 
+# Show DOM metadata (href, src, id) inline — great for finding URLs
+agent@shell:~$ ls --meta --type link
+[x] link           skip_to_content_link  href=https://example.com/#content <a>
+[x] link           logo_link             href=https://example.com/ <a>
+
 # Paginate large directories
 agent@shell:~$ ls -n 10              # First 10 items
 agent@shell:~$ ls -n 10 --offset 10  # Items 11-20
@@ -195,14 +200,34 @@ Every node has a type prefix that communicates metadata without relying on color
 ### Reading Content
 
 ```bash
-# Inspect an element's metadata and text
+# Inspect an element — cat shows full AX + DOM metadata
 agent@shell:~$ cat submit_btn
 --- submit_btn ---
   Role:  button
   Type:  [x] interactive
   AXID:  42
   DOM:   backend#187
+  Tag:   <button>
+  ID:    submit-form
+  Class: btn btn-primary
   Text:  Submit Form
+  HTML:  <button id="submit-form" class="btn btn-primary">Submit Form</button>
+
+# cat on a link reveals the href URL
+agent@shell:~$ cat Read_more
+--- Read_more ---
+  Role:  link
+  Type:  [x] interactive
+  AXID:  98
+  DOM:   backend#312
+  Tag:   <a>
+  URL:   https://en.wikipedia.org/wiki/Article_Title
+  Text:  Read more
+  HTML:  <a href="https://en.wikipedia.org/wiki/Article_Title">Read more</a>
+
+# Navigate to parent to find its properties (e.g. span inside a link)
+agent@shell:~$ cd ..
+agent@shell:~$ cat parent_link
 
 # Bulk extract ALL text from a section (one call instead of 50+ cat calls)
 agent@shell:/main$ text
@@ -407,11 +432,11 @@ Options:
 
 | Command | Description |
 |---|---|
-| `ls [options]` | List children (`-l`, `-r`, `-n N`, `--offset N`, `--type ROLE`, `--count`) |
+| `ls [options]` | List children (`-l`, `--meta`, `-r`, `-n N`, `--offset N`, `--type ROLE`, `--count`) |
 | `cd <path>` | Navigate (`..`, `/` for root, `~` for browser, `main/form` for multi-level) |
 | `pwd` | Print current path (DOM path or browser path) |
 | `tree [depth]` | Tree view of current node (default depth: 2) |
-| `cat <name>` | Read element's role, type, value, DOM ID, and text content |
+| `cat <name>` | Full element metadata: AX info + DOM properties (tag, href, src, id, class, outerHTML) |
 | `text [name] [-n N]` | Bulk extract all text from a section (much faster than multiple `cat`) |
 | `grep [opts] <pattern>` | Search children by name/role/value (`-r` recursive, `-n N` limit) |
 | `find [opts] <pattern>` | Deep recursive search with full paths (`--type ROLE`, `-n N`) |

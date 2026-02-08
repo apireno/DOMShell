@@ -484,6 +484,7 @@ const COMMAND_HELP: Record<string, string> = {
     "",
     "\x1b[33mOptions:\x1b[0m",
     "  \x1b[32m-l, --long\x1b[0m      Long format: type prefix, role, and name",
+    "  \x1b[32m--meta\x1b[0m          Include DOM properties (href, src, id, tag) per element",
     "  \x1b[32m-r, --recursive\x1b[0m Show nested children (one level deep)",
     "  \x1b[32m-n N\x1b[0m            Limit output to first N entries",
     "  \x1b[32m--offset N\x1b[0m      Skip first N entries (for pagination)",
@@ -534,12 +535,16 @@ const COMMAND_HELP: Record<string, string> = {
   ].join("\r\n"),
 
   cat: [
-    "\x1b[1;36mcat\x1b[0m \u2014 Read metadata and text content of a node",
+    "\x1b[1;36mcat\x1b[0m \u2014 Read full metadata for a node (AX + DOM properties)",
     "",
     "\x1b[33mUsage:\x1b[0m cat <name>",
     "",
-    "Shows: role, type ([d]/[x]/[-]), AX ID, DOM backend ID,",
-    "value, child count (dirs), and DOM text content.",
+    "Shows AX info (role, type, value) plus real DOM properties:",
+    "  tag, href/URL, src, action, id, class, alt, title, placeholder,",
+    "  target, name, text content, and an outer HTML snippet.",
+    "",
+    "Use 'cd ..' to navigate to a parent element if you need",
+    "its properties (e.g. navigate up from a span to its <a> for href).",
     "",
     "Requires a tab context (cd into a tab first).",
   ].join("\r\n"),
@@ -1047,6 +1052,7 @@ async function handleLs(args: string[]): Promise<string> {
   const refreshMsg = await ensureFreshTree();
 
   const longFormat = pa.flags.has("-l");
+  const showMeta = pa.flags.has("--meta");
   const recursive = pa.flags.has("-r");
   const countOnly = pa.flags.has("--count");
   const limit = pa.named["-n"] ? parseInt(pa.named["-n"], 10) : 0;
@@ -1100,12 +1106,24 @@ async function handleLs(args: string[]): Promise<string> {
 
   for (const child of children) {
     const tp = typePrefix(child);
-    if (longFormat) {
+    let meta = "";
+    if (showMeta && child.backendDOMNodeId) {
+      try {
+        const props = await cdp.getElementProperties(child.backendDOMNodeId);
+        const parts: string[] = [];
+        if (props.href) parts.push(`href=${props.href}`);
+        if (props.src) parts.push(`src=${props.src}`);
+        if (props.id) parts.push(`id=${props.id}`);
+        if (props.tag) parts.push(`<${props.tag}>`);
+        if (parts.length > 0) meta = `  \x1b[90m${parts.join(" ")}\x1b[0m`;
+      } catch { /* stale node */ }
+    }
+    if (longFormat || showMeta) {
       const role = child.role.padEnd(14);
       const name = child.isDirectory
         ? `\x1b[1;34m${child.name}/\x1b[0m`
         : formatColoredName(child);
-      lines.push(`${tp} ${role} ${name}`);
+      lines.push(`${tp} ${role} ${name}${meta}`);
     } else {
       if (child.isDirectory) {
         lines.push(`\x1b[1;34m${child.name}/\x1b[0m`);
@@ -1495,6 +1513,48 @@ async function handleCat(args: string[]): Promise<string> {
   }
 
   if (match.backendDOMNodeId) {
+    // Pull real DOM properties (href, src, tag, id, class, etc.)
+    let props: Record<string, string> = {};
+    try {
+      props = await cdp.getElementProperties(match.backendDOMNodeId);
+      if (props.tag) {
+        lines.push(`  \x1b[33mTag:\x1b[0m   <${props.tag}>`);
+      }
+      if (props.href) {
+        lines.push(`  \x1b[33mURL:\x1b[0m   \x1b[4m${props.href}\x1b[0m`);
+      }
+      if (props.src) {
+        lines.push(`  \x1b[33mSrc:\x1b[0m   ${props.src}`);
+      }
+      if (props.action) {
+        lines.push(`  \x1b[33mAction:\x1b[0m ${props.action}`);
+      }
+      if (props.id) {
+        lines.push(`  \x1b[33mID:\x1b[0m    ${props.id}`);
+      }
+      if (props.class) {
+        lines.push(`  \x1b[33mClass:\x1b[0m ${props.class.slice(0, 120)}`);
+      }
+      if (props.alt) {
+        lines.push(`  \x1b[33mAlt:\x1b[0m   ${props.alt}`);
+      }
+      if (props.title) {
+        lines.push(`  \x1b[33mTitle:\x1b[0m ${props.title}`);
+      }
+      if (props.placeholder) {
+        lines.push(`  \x1b[33mPlaceholder:\x1b[0m ${props.placeholder}`);
+      }
+      if (props.target) {
+        lines.push(`  \x1b[33mTarget:\x1b[0m ${props.target}`);
+      }
+      if (props.name) {
+        lines.push(`  \x1b[33mName:\x1b[0m  ${props.name}`);
+      }
+    } catch {
+      // Element may be stale
+    }
+
+    // Text content
     try {
       const text = await cdp.getTextContent(match.backendDOMNodeId);
       if (text.trim()) {
@@ -1507,6 +1567,12 @@ async function handleCat(args: string[]): Promise<string> {
       }
     } catch {
       // Ignore
+    }
+
+    // Outer HTML snippet
+    if (props.outerHTML) {
+      lines.push(`  \x1b[33mHTML:\x1b[0m`);
+      lines.push(`  \x1b[90m${props.outerHTML}\x1b[0m`);
     }
   }
 

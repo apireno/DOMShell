@@ -445,13 +445,27 @@ const COMMAND_HELP: Record<string, string> = {
   ].join("\r\n"),
 
   windows: [
-    "\x1b[1;36mwindows\x1b[0m \u2014 List all browser windows",
+    "\x1b[1;36mwindows\x1b[0m \u2014 List all browser windows with their tabs",
     "",
     "\x1b[33mUsage:\x1b[0m windows",
     "",
-    "Shows all Chrome windows with their IDs and tab counts.",
+    "Shows all Chrome windows with their tabs grouped underneath.",
+    "Active tabs are marked with *, the current shell tab with *current.",
     "",
     "\x1b[33mEquivalent to:\x1b[0m ls ~/windows/",
+  ].join("\r\n"),
+
+  here: [
+    "\x1b[1;36mhere\x1b[0m \u2014 Jump to the active tab in the focused window",
+    "",
+    "\x1b[33mUsage:\x1b[0m here",
+    "",
+    "Finds the active tab in the last focused Chrome window and enters it.",
+    "Equivalent to finding the focused tab's ID and running 'cd tabs/<id>'.",
+    "",
+    "\x1b[33mExamples:\x1b[0m",
+    "  here                 Enter whatever tab you're currently looking at",
+    "  here                 (again) Prints 'Already in tab ...' if unchanged",
   ].join("\r\n"),
 
   refresh: [
@@ -781,6 +795,8 @@ async function executeCommand(raw: string): Promise<string> {
         return await handleCd(args);
       case "pwd":
         return handlePwd();
+      case "here":
+        return await handleHere();
       case "cat":
         return await handleCat(args);
       case "text":
@@ -863,7 +879,8 @@ function handleHelp(): string {
     "",
     "\x1b[1;33mBrowser:\x1b[0m",
     "  \x1b[32mtabs\x1b[0m            List all open browser tabs",
-    "  \x1b[32mwindows\x1b[0m         List all browser windows",
+    "  \x1b[32mwindows\x1b[0m         List all browser windows with their tabs",
+    "  \x1b[32mhere\x1b[0m            Jump to the active tab in the focused window",
     "  \x1b[32mcd tabs/<id>\x1b[0m    Enter a tab (by ID or name pattern)",
     "  \x1b[32mcd ~\x1b[0m or \x1b[32mcd /\x1b[0m    Go to browser root",
     "",
@@ -956,7 +973,7 @@ async function ensureFreshTree(): Promise<string> {
 // ---- Tab Completion ----
 
 const COMMANDS = [
-  "help", "tabs", "windows", "refresh", "ls", "cd", "pwd", "cat",
+  "help", "tabs", "windows", "here", "refresh", "ls", "cd", "pwd", "cat",
   "click", "focus", "type", "grep", "find", "whoami", "env", "export",
   "tree", "debug", "clear", "navigate", "goto", "open", "connect", "disconnect", "text",
 ];
@@ -1150,15 +1167,30 @@ async function listBrowserLevel(browserPath: string[]): Promise<string> {
   }
 
   if (browserPath[0] === "windows" && browserPath.length === 1) {
-    // List windows
-    const lines: string[] = [
-      `  \x1b[90mID     TABS    STATUS\x1b[0m`,
-    ];
-    for (const win of allWindows) {
-      const tabCount = String(win.tabs?.length ?? 0).padEnd(7);
-      const status = win.focused ? "\x1b[33mfocused\x1b[0m" : "";
-      lines.push(`  ${String(win.id ?? "?").padEnd(6)} ${tabCount} ${status}`);
+    // Tree view of windows with their tabs
+    const lines: string[] = [];
+    for (let wi = 0; wi < allWindows.length; wi++) {
+      const win = allWindows[wi];
+      const focused = win.focused ? " \x1b[33m(focused)\x1b[0m" : "";
+      lines.push(`\x1b[1;34mWindow ${win.id ?? "?"}\x1b[0m${focused}`);
+
+      const tabs = win.tabs ?? [];
+      for (let ti = 0; ti < tabs.length; ti++) {
+        const tab = tabs[ti];
+        const isLast = ti === tabs.length - 1;
+        const connector = isLast ? "\u2514\u2500\u2500 " : "\u251c\u2500\u2500 ";
+        const active = tab.active ? "\x1b[33m*\x1b[0m" : " ";
+        const current = tab.id === state.activeTabId ? " \x1b[32m*current\x1b[0m" : "";
+        const id = String(tab.id ?? "?").padEnd(6);
+        const title = (tab.title ?? "untitled").slice(0, 32).padEnd(32);
+        const url = (tab.url ?? "").replace(/^https?:\/\//, "").slice(0, 30);
+        lines.push(`${connector}${active}${id} ${title} \x1b[90m${url}\x1b[0m${current}`);
+      }
+
+      if (wi < allWindows.length - 1) lines.push("");
     }
+    lines.push("");
+    lines.push(`\x1b[90mUse 'cd windows/<id>/<tab-id>' to enter a tab, or 'here' to jump to the active tab.\x1b[0m`);
     return lines.join("\r\n");
   }
 
@@ -1396,6 +1428,25 @@ async function enterTab(target: string): Promise<string> {
   } catch (err: any) {
     return `\x1b[31mcd: ${err.message}\x1b[0m`;
   }
+}
+
+// ---- here ----
+
+async function handleHere(): Promise<string> {
+  const lastFocused = await chrome.windows.getLastFocused({ populate: true });
+  const activeTab = lastFocused.tabs?.find(t => t.active);
+  if (!activeTab?.id) {
+    return "\x1b[31mNo active tab found.\x1b[0m";
+  }
+
+  // Already inside this tab?
+  if (state.activeTabId === activeTab.id && isInsideTab()) {
+    return `Already in tab ${activeTab.id} \u2014 ${activeTab.title ?? "unknown"}`;
+  }
+
+  // Navigate to ~/tabs/<id>
+  state.path = ["tabs"];
+  return await enterTab(String(activeTab.id));
 }
 
 // ---- pwd ----

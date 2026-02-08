@@ -55,12 +55,18 @@ Type 'tabs' to see open browser tabs, then 'cd tabs/<id>' to enter one.
 agent@shell:~$
 ```
 
-You start at `~` (the browser root). From here you can see your windows and tabs:
+You start at `~` (the browser root). Jump straight to the active tab with `here`, or explore:
 
 ```
 agent@shell:~$ ls
   windows/       (2 windows)
   tabs/          (5 tabs)
+
+agent@shell:~$ here
+✓ Entered tab 123
+  Title: Google
+  URL:   https://google.com
+  AX Nodes: 247
 ```
 
 ### Browsing Tabs and Windows
@@ -92,11 +98,16 @@ agent@shell:~$
 agent@shell:~$ cd tabs/github
 ✓ Entered tab 124 (GitHub - apireno)
 
-# List windows
+# List windows (shows tabs grouped under each window)
 agent@shell:~$ windows
-  ID     TABS    STATUS
-  1      3       focused
-  2      2
+Window 1 (focused)
+├── *123   Google                        google.com
+├──  124   GitHub - apireno              github.com/apireno
+└──  125   Wikipedia                     en.wikipedia.org
+
+Window 2
+├── *126   Stack Overflow                stackoverflow.com
+└──  127   MDN Web Docs                  developer.mozilla.org
 
 # Browse a specific window's tabs
 agent@shell:~$ cd windows/2
@@ -383,7 +394,8 @@ Options:
 | Command | Description |
 |---|---|
 | `tabs` | List all open tabs (shortcut for `ls ~/tabs/`) |
-| `windows` | List all windows (shortcut for `ls ~/windows/`) |
+| `windows` | List all windows with their tabs grouped underneath |
+| `here` | Jump to the active tab in the focused window |
 | `cd ~` | Go to browser root |
 | `cd ~/tabs/<id>` | Switch to a tab by ID (enters automatically) |
 | `cd ~/tabs/<pattern>` | Switch to a tab by title/URL substring match |
@@ -653,7 +665,7 @@ The MCP server is hardened with multiple layers of security. **By default, it's 
 
 | Tier | Commands | Default | Enable With |
 |------|----------|---------|-------------|
-| **Read** | `ls`, `cd`, `pwd`, `cat`, `text`, `grep`, `find`, `tree`, `refresh`, `tabs`, `windows` | Enabled | *(always on)* |
+| **Read** | `ls`, `cd`, `pwd`, `cat`, `text`, `grep`, `find`, `tree`, `refresh`, `tabs`, `windows`, `here` | Enabled | *(always on)* |
 | **Navigate** | `navigate`, `goto`, `open` | **Disabled** | `--allow-write` |
 | **Write** | `click`, `focus`, `type` | **Disabled** | `--allow-write` |
 | **Sensitive** | `whoami` (exposes cookies) | **Disabled** | `--allow-sensitive` |
@@ -724,6 +736,7 @@ agent@shell:$ disconnect
 | MCP Tool | Maps To | Tier |
 |----------|---------|------|
 | `agentshell_tabs` | `tabs` (list all tabs) | Read |
+| `agentshell_here` | `here` (jump to active tab) | Read |
 | `agentshell_ls` | `ls [options]` (DOM or browser level) | Read |
 | `agentshell_cd` | `cd <path>` (`~`, `~/tabs/`, `/`, `..`) | Read |
 | `agentshell_pwd` | `pwd` | Read |

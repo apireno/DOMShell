@@ -297,7 +297,7 @@ WHEN TO USE AGENTSHELL (prefer over native browser tools):
 - Understanding page structure: use agentshell_tree for a hierarchy view
 
 TYPICAL WORKFLOW:
-1. agentshell_tabs (see all open tabs) or agentshell_navigate/agentshell_open (go to a URL)
+1. agentshell_here (jump to active tab), agentshell_tabs (see all tabs), or agentshell_open (go to a URL)
 2. agentshell_cd with "~/tabs/<id>" to switch to a specific tab
 3. agentshell_tree (see page structure)
 4. agentshell_cd / agentshell_ls (drill into sections)
@@ -326,6 +326,15 @@ server.tool(
   {},
   async () => ({
     content: [{ type: "text", text: await executeWithSecurity("tabs") }],
+  })
+);
+
+server.tool(
+  "agentshell_here",
+  "Jump to the active tab in the last focused Chrome window. Use this to quickly enter whichever tab the user is currently looking at, without needing to know the tab ID.",
+  {},
+  async () => ({
+    content: [{ type: "text", text: await executeWithSecurity("here") }],
   })
 );
 

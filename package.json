@@ -1,5 +1,5 @@
 {
-  "name": "agenticshell",
+  "name": "domshell",
   "version": "1.0.0",
   "description": "A Chrome Extension that turns the DOM into a filesystem — navigate the web with ls, cd, cat, and grep.",
   "type": "module",
@@ -10,15 +10,15 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/apireno/AgenticShell.git"
+    "url": "git+https://github.com/apireno/DOMShell.git"
   },
   "keywords": [],
   "author": "",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/apireno/AgenticShell/issues"
+    "url": "https://github.com/apireno/DOMShell/issues"
   },
-  "homepage": "https://github.com/apireno/AgenticShell#readme",
+  "homepage": "https://github.com/apireno/DOMShell#readme",
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",

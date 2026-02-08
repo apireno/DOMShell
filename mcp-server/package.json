@@ -1,7 +1,7 @@
 {
-  "name": "agentshell-mcp-server",
+  "name": "domshell-mcp-server",
   "version": "1.0.0",
-  "description": "MCP server for AgentShell — bridges Claude Desktop to the Chrome Extension",
+  "description": "MCP server for DOMShell — bridges Claude Desktop to the Chrome Extension",
   "type": "module",
   "scripts": {
     "start": "tsx index.ts"

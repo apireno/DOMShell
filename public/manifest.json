@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "AgentShell",
+  "name": "DOMShell",
   "description": "A Headless OS for agents — browse the web using standard Linux commands via a terminal in the Chrome Side Panel.",
   "version": "1.0.0",
   "permissions": [
@@ -26,8 +26,8 @@
     "open_in_tab": false
   },
   "action": {
-    "default_title": "AgentShell"
+    "default_title": "DOMShell"
   },
-  "homepage_url": "https://github.com/apireno/AgenticShell",
+  "homepage_url": "https://github.com/apireno/DOMShell",
   "icons": {}
 }

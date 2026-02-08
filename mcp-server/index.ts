@@ -36,7 +36,7 @@ const AUTH_TOKEN = getFlagValue("--token", "") || randomBytes(24).toString("hex"
 // ---- Logging ----
 
 function log(msg: string): void {
-  process.stderr.write(`[AgentShell MCP] ${msg}\n`);
+  process.stderr.write(`[DOMShell MCP] ${msg}\n`);
 }
 
 function audit(entry: string): void {
@@ -84,7 +84,7 @@ function confirmAction(description: string): Promise<boolean> {
   return new Promise((resolve) => {
     try {
       const fd = openSync("/dev/tty", "r+");
-      const prompt = `\n[AgentShell] Claude wants to: ${description}\nAllow? (y/n): `;
+      const prompt = `\n[DOMShell] Claude wants to: ${description}\nAllow? (y/n): `;
       writeSync(fd, prompt);
 
       const buf = Buffer.alloc(10);
@@ -148,7 +148,7 @@ wss.on("listening", () => {
   log(`WebSocket server listening on ws://127.0.0.1:${PORT}`);
   log(`Auth token: ${AUTH_TOKEN}`);
   log("");
-  log("In the AgentShell terminal, run:");
+  log("In the DOMShell terminal, run:");
   log(`  connect ${AUTH_TOKEN}`);
   log("");
   log(`Security: write=${ALLOW_WRITE ? "ON" : "OFF"}, sensitive=${ALLOW_SENSITIVE ? "ON" : "OFF"}, confirm=${!NO_CONFIRM ? "ON" : "OFF"}`);
@@ -221,7 +221,7 @@ wss.on("connection", (ws, req) => {
 function sendCommand(command: string): Promise<string> {
   return new Promise((resolve, reject) => {
     if (!extensionClient || extensionClient.readyState !== 1) {
-      reject(new Error("Extension not connected. Open the AgentShell side panel and run: connect <token>"));
+      reject(new Error("Extension not connected. Open the DOMShell side panel and run: connect <token>"));
       return;
     }
 
@@ -283,36 +283,50 @@ async function executeWithSecurity(command: string): Promise<string> {
 
 const server = new McpServer(
   {
-    name: "agentshell",
+    name: "domshell",
     version: "1.0.0",
   },
   {
-    instructions: `AgentShell gives you full browser control through a filesystem metaphor — the DOM's Accessibility Tree is mapped to directories (containers) and files (interactive elements like buttons, links, inputs). The browser itself (windows, tabs) is also part of the hierarchy.
+    instructions: `DOMShell gives you full browser control through a filesystem metaphor. The DOM's Accessibility Tree (AXTree) is mapped to directories (containers like navigation/, main/, form/) and files (interactive elements like submit_btn, search_input, login_link). The browser itself (windows, tabs) is also part of the hierarchy.
 
-WHEN TO USE AGENTSHELL (prefer over native browser tools):
-- Navigating to websites: use agentshell_navigate or agentshell_open
-- Listing/switching tabs: use agentshell_tabs to see all tabs, then agentshell_cd with "~/tabs/<id>" to switch
-- Reading page content: use agentshell_ls, agentshell_cat, agentshell_text, agentshell_tree, agentshell_find, agentshell_grep
-- Interacting with pages: use agentshell_click, agentshell_focus, agentshell_type
-- Understanding page structure: use agentshell_tree for a hierarchy view
+WHEN TO USE DOMSHELL (prefer over native browser tools):
+- Navigating to websites: use domshell_navigate or domshell_open
+- Listing/switching tabs: use domshell_tabs, then domshell_cd with "~/tabs/<id>"
+- Reading page content: domshell_text for bulk text, domshell_cat for element metadata, domshell_tree for structure
+- Finding elements: domshell_find (deep recursive) or domshell_grep (current directory)
+- Getting URLs/hrefs: domshell_cat on a link shows its URL, or domshell_find with --meta --type link
+- Interacting: domshell_click, domshell_focus, domshell_type
 
 TYPICAL WORKFLOW:
-1. agentshell_here (jump to active tab), agentshell_tabs (see all tabs), or agentshell_open (go to a URL)
-2. agentshell_cd with "~/tabs/<id>" to switch to a specific tab
-3. agentshell_tree (see page structure)
-4. agentshell_cd / agentshell_ls (drill into sections)
-5. agentshell_text (bulk extract text from a section — much faster than multiple cat calls)
-6. agentshell_find or agentshell_grep (search for specific elements)
-7. agentshell_click / agentshell_focus / agentshell_type (interact)
+1. Enter a tab: domshell_here (focused tab), domshell_cd with "%here%" (composable), or domshell_open (new tab)
+2. Understand structure: domshell_tree (overview), domshell_ls (children)
+3. Extract content: domshell_text (bulk text — much faster than multiple cat calls)
+4. Find specific elements: domshell_find with pattern or --type (e.g. --type link, --type button)
+5. Inspect element details: domshell_cat shows full metadata — AX role, DOM tag, href/src/id/class, text, outerHTML
+6. Interact: domshell_click, domshell_focus + domshell_type
 
 BROWSER HIERARCHY:
-- "~" is the browser root. "cd ~" goes there. "ls" at ~ shows windows/ and tabs/.
-- "~/tabs/" lists all open tabs. "cd ~/tabs/<id>" switches to that tab.
-- "~/windows/" lists Chrome windows. "cd ~/windows/<id>/" shows tabs in that window.
-- "/" is the current tab's DOM tree root (Accessibility Tree). All DOM commands work here.
-- "cd .." from / goes up to ~ (browser level). "cd /" returns to the DOM root.
+- "~" or "/" = browser root. "ls" shows windows/ and tabs/.
+- "~/tabs/<id>" = enter a tab by ID. "~/tabs/<pattern>" = match by title/URL substring.
+- "~/windows/<id>/" = browse a window's tabs.
+- "%here%" = path variable that expands to the focused tab (via its window). Composable:
+  - "cd %here%" = enter the active tab
+  - "cd %here%/.." = go to the window containing the active tab
+  - "cd %here%/main" = enter the active tab and navigate to main
+- "cd .." from DOM root exits to browser level.
 
-AgentShell works with the Accessibility Tree, which means element names are human-readable (e.g. "Sign in", "Search", "Submit") rather than CSS selectors. Use agentshell_find to locate elements by name, role, or text content.
+READING ELEMENT METADATA:
+- domshell_cat shows full info for any element: AX role, DOM tag, href (for links), src (for images), id, class, text content, and an outerHTML snippet.
+- If a child element (like a span) doesn't have the property you need (like href), navigate up with "cd .." to the parent element (like the <a> tag) and cat that instead.
+- domshell_ls with --meta option shows href/src/id inline for each element in the listing.
+- domshell_find with --meta option shows href/src/id inline for each search result. Use "find --type link --meta" to get all URLs on a page.
+
+IMPORTANT TIPS:
+- Element names are human-readable (e.g. "Sign_in_btn", "Search_input") not CSS selectors.
+- Use domshell_text for reading article content — it's one call vs. dozens of cat calls.
+- Use domshell_find --type link --meta to extract all URLs from a page.
+- Directories (navigation/, main/) are containers you cd into. Files (submit_btn, logo_link) are leaf elements you cat or click.
+- The AXTree auto-refreshes after clicks/navigation — no manual refresh needed.
 
 Note: When running under Claude Desktop, use --no-confirm to avoid /dev/tty prompts for click/type actions.`,
   }
@@ -321,7 +335,7 @@ Note: When running under Claude Desktop, use --no-confirm to avoid /dev/tty prom
 // -- Read tier tools (always available) --
 
 server.tool(
-  "agentshell_tabs",
+  "domshell_tabs",
   "List all open browser tabs with their IDs, titles, URLs, and window info. Use this to find the right tab before switching. Equivalent to 'ls ~/tabs/'.",
   {},
   async () => ({
@@ -330,7 +344,7 @@ server.tool(
 );
 
 server.tool(
-  "agentshell_here",
+  "domshell_here",
   "Jump to the active tab in the last focused Chrome window. Use this to quickly enter whichever tab the user is currently looking at, without needing to know the tab ID.",
   {},
   async () => ({
@@ -339,8 +353,8 @@ server.tool(
 );
 
 server.tool(
-  "agentshell_ls",
-  "List children of the current directory. In the DOM tree: shows elements as files and directories. At the browser level (~): shows tabs/windows. Supports flags: -l (long format), -r (recursive), -n N (limit), --offset N, --type ROLE, --count.",
+  "domshell_ls",
+  "List children of the current directory. In the DOM tree: shows elements as files and directories. At the browser level (~): shows tabs/windows. Supports flags: -l (long format), --meta (show DOM properties like href/src/id inline), -r (recursive), -n N (limit), --offset N, --type ROLE, --count.",
   { options: z.string().optional().describe("Flags and options, e.g. '-l', '-n 10', '--type button', or '~/tabs/' for tab listing") },
   async ({ options }) => ({
     content: [{ type: "text", text: await executeWithSecurity(`ls ${options ?? ""}`.trim()) }],
@@ -348,16 +362,16 @@ server.tool(
 );
 
 server.tool(
-  "agentshell_cd",
-  "Change directory. In the DOM tree: navigate containers with paths like 'main/form', '..', '/'. For browser-level: 'cd ~' (browser root), 'cd ~/tabs/<id>' (switch to tab by ID), 'cd ~/tabs/<pattern>' (switch by title/URL match), 'cd ~/windows/<id>' (window's tabs). 'cd ..' from DOM root goes to browser level.",
-  { path: z.string().describe("Path: DOM path, '~', '~/tabs/<id>', '~/windows/<id>', '..', '/'") },
+  "domshell_cd",
+  "Change directory. '~' and '/' go to browser root. '%here%' expands to the focused tab via its window path — use 'cd %here%' to enter the active tab, 'cd %here%/..' for its window, 'cd %here%/main' to enter and navigate. DOM paths: 'main/form', '..'. Browser paths: '~/tabs/<id>' (switch by ID), '~/tabs/<pattern>' (switch by title/URL match), '~/windows/<id>' (window's tabs).",
+  { path: z.string().describe("Path: DOM path, '~', '~/tabs/<id>', '~/windows/<id>', '%here%', '..', '/'") },
   async ({ path }) => ({
     content: [{ type: "text", text: await executeWithSecurity(`cd ${path}`) }],
   })
 );
 
 server.tool(
-  "agentshell_pwd",
+  "domshell_pwd",
   "Print the current working directory path in the DOM tree.",
   {},
   async () => ({
@@ -366,7 +380,7 @@ server.tool(
 );
 
 server.tool(
-  "agentshell_cat",
+  "domshell_cat",
   "Read detailed metadata about a DOM element: role, type, AX ID, DOM backend ID, value, child count, and text content.",
   { name: z.string().describe("Name of the element to inspect") },
   async ({ name }) => ({
@@ -375,24 +389,26 @@ server.tool(
 );
 
 server.tool(
-  "agentshell_find",
-  "Deep recursive search across the entire DOM tree from the current directory. Returns full paths to matching elements. Use --type to filter by role.",
+  "domshell_find",
+  "Deep recursive search across the entire DOM tree from the current directory. Returns full paths to matching elements. Use --type to filter by role, --meta to include DOM properties (href, src, id) inline. Example: find --type link --meta to get all URLs on a page.",
   {
     pattern: z.string().optional().describe("Search pattern (matches name, role, value)"),
     type: z.string().optional().describe("Filter by AX role (e.g. 'button', 'link', 'textbox', 'combobox')"),
     limit: z.number().optional().describe("Maximum number of results"),
+    meta: z.boolean().optional().describe("Include DOM properties (href, src, id, tag) per result"),
   },
-  async ({ pattern, type, limit }) => {
+  async ({ pattern, type, limit, meta }) => {
     let cmd = "find";
     if (pattern) cmd += ` ${pattern}`;
     if (type) cmd += ` --type ${type}`;
     if (limit) cmd += ` -n ${limit}`;
+    if (meta) cmd += ` --meta`;
     return { content: [{ type: "text", text: await executeWithSecurity(cmd) }] };
   }
 );
 
 server.tool(
-  "agentshell_grep",
+  "domshell_grep",
   "Search children of the current directory for elements matching a pattern. Matches against name, role, and value. Case-insensitive.",
   {
     pattern: z.string().describe("Search pattern"),
@@ -409,7 +425,7 @@ server.tool(
 );
 
 server.tool(
-  "agentshell_tree",
+  "domshell_tree",
   "Show a tree view of the current directory in the DOM, displaying the hierarchy of elements with type prefixes [d]=directory, [x]=interactive, [-]=static.",
   { depth: z.number().optional().describe("Maximum depth to display (default: 2)") },
   async ({ depth }) => ({
@@ -418,8 +434,8 @@ server.tool(
 );
 
 server.tool(
-  "agentshell_text",
-  "Extract all text content from the current directory or a named child, including all descendants. Returns the full textContent in a single call — much more efficient than multiple agentshell_cat calls for reading articles or page content.",
+  "domshell_text",
+  "Extract all text content from the current directory or a named child, including all descendants. Returns the full textContent in a single call — much more efficient than multiple domshell_cat calls for reading articles or page content.",
   {
     name: z.string().optional().describe("Name of a child element to extract text from (default: current directory)"),
     limit: z.number().optional().describe("Maximum characters to return"),
@@ -433,7 +449,7 @@ server.tool(
 );
 
 server.tool(
-  "agentshell_refresh",
+  "domshell_refresh",
   "Force re-fetch the Accessibility Tree. Use after page navigation or significant DOM changes. Note: the tree also auto-refreshes when changes are detected.",
   {},
   async () => ({
@@ -445,7 +461,7 @@ server.tool(
 
 if (ALLOW_WRITE) {
   server.tool(
-    "agentshell_click",
+    "domshell_click",
     "Click a DOM element. This may trigger navigation, form submission, or other page changes. The DOM tree will auto-refresh on the next command.",
     { name: z.string().describe("Name of the element to click") },
     async ({ name }) => ({
@@ -454,8 +470,8 @@ if (ALLOW_WRITE) {
   );
 
   server.tool(
-    "agentshell_focus",
-    "Focus an input element. Use before 'agentshell_type' to direct keyboard input to the right field.",
+    "domshell_focus",
+    "Focus an input element. Use before 'domshell_type' to direct keyboard input to the right field.",
     { name: z.string().describe("Name of the input element to focus") },
     async ({ name }) => ({
       content: [{ type: "text", text: await executeWithSecurity(`focus ${name}`) }],
@@ -463,8 +479,8 @@ if (ALLOW_WRITE) {
   );
 
   server.tool(
-    "agentshell_type",
-    "Type text into the currently focused element. Use agentshell_focus first to target an input field.",
+    "domshell_type",
+    "Type text into the currently focused element. Use domshell_focus first to target an input field.",
     { text: z.string().describe("Text to type into the focused element") },
     async ({ text }) => ({
       content: [{ type: "text", text: await executeWithSecurity(`type ${text}`) }],
@@ -472,7 +488,7 @@ if (ALLOW_WRITE) {
   );
 
   server.tool(
-    "agentshell_navigate",
+    "domshell_navigate",
     "Navigate the current tab to a URL. Automatically rebuilds the accessibility tree after navigation completes. Requires a tab context (cd into a tab first). Use this to go to a specific website without opening a new tab.",
     { url: z.string().describe("URL to navigate to (e.g. 'https://example.com' or 'example.com')") },
     async ({ url }) => ({
@@ -481,7 +497,7 @@ if (ALLOW_WRITE) {
   );
 
   server.tool(
-    "agentshell_open",
+    "domshell_open",
     "Open a URL in a new browser tab and enter it (path becomes ~/tabs/<id>). Automatically builds the accessibility tree after the page loads. Works from any location. Use this when you want to open a new tab rather than navigating the current one.",
     { url: z.string().describe("URL to open in a new tab (e.g. 'https://example.com' or 'example.com')") },
     async ({ url }) => ({
@@ -494,7 +510,7 @@ if (ALLOW_WRITE) {
 
 if (ALLOW_SENSITIVE) {
   server.tool(
-    "agentshell_whoami",
+    "domshell_whoami",
     "Check authentication status by examining cookies for the current page. Shows session cookies and expiry.",
     {},
     async () => ({
@@ -506,8 +522,8 @@ if (ALLOW_SENSITIVE) {
 // -- Fallback execute tool --
 
 server.tool(
-  "agentshell_execute",
-  "Execute any AgentShell command. Use this for commands not covered by specific tools (e.g. 'env', 'export', 'debug stats'). Write and sensitive commands are subject to the same security restrictions.",
+  "domshell_execute",
+  "Execute any DOMShell command. Use this for commands not covered by specific tools (e.g. 'env', 'export', 'debug stats'). Write and sensitive commands are subject to the same security restrictions.",
   { command: z.string().describe("The full command to execute (e.g. 'ls -l', 'debug stats')") },
   async ({ command }) => ({
     content: [{ type: "text", text: await executeWithSecurity(command) }],
@@ -517,7 +533,7 @@ server.tool(
 // ---- Start ----
 
 async function main() {
-  log("Starting AgentShell MCP server...");
+  log("Starting DOMShell MCP server...");
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }

@@ -18,9 +18,9 @@ const state: ShellState = {
   axNodeIds: [],           // No DOM context yet
   activeTabId: null,       // No tab attached yet
   env: {
-    SHELL: "/bin/agentshell",
+    SHELL: "/bin/domshell",
     TERM: "xterm-256color",
-    PS1: "agent@shell:$PWD$ ",
+    PS1: "dom@shell:$PWD$ ",
   },
 };
 
@@ -54,6 +54,21 @@ function getDomStartIndex(path: string[]): number {
 /** Are we currently inside a tab's DOM? */
 function isInsideTab(): boolean {
   return getTabIdFromPath(state.path) !== null;
+}
+
+/** Expand path variables like %here% to concrete paths. */
+async function expandPathVariable(target: string): Promise<string> {
+  if (!target.includes("%here%")) return target;
+
+  const lastFocused = await chrome.windows.getLastFocused({ populate: true });
+  const activeTab = lastFocused.tabs?.find(t => t.active);
+  if (!activeTab?.id || !lastFocused.id) {
+    throw new Error("No active tab found");
+  }
+
+  // Expand to window-based path so %here%/.. goes to the window
+  const expanded = `~/windows/${lastFocused.id}/${activeTab.id}`;
+  return target.replace("%here%", expanded);
 }
 
 /** Guard: throws if not inside a tab. Replaces old ensureAttached(). */
@@ -172,7 +187,7 @@ function wsConnect(): void {
       wsConnected = true;
       setWsStatus("connected");
       startKeepaliveAlarm();
-      console.log("[AgentShell] WebSocket connected to MCP server");
+      console.log("[DOMShell] WebSocket connected to MCP server");
 
       // Start heartbeat to keep MV3 service worker alive
       if (wsHeartbeatTimer) clearInterval(wsHeartbeatTimer);
@@ -282,7 +297,7 @@ function wsDisconnect(): void {
 // ---- Alarm-based keepalive for MV3 service worker ----
 // chrome.alarms survive worker suspension and wake the worker when they fire.
 
-const KEEPALIVE_ALARM = "agentshell-keepalive";
+const KEEPALIVE_ALARM = "domshell-keepalive";
 
 function startKeepaliveAlarm(): void {
   chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.4 });
@@ -377,7 +392,7 @@ chrome.sidePanel
 // ---- Message Router ----
 
 chrome.runtime.onConnect.addListener((port) => {
-  if (port.name !== "agentshell") return;
+  if (port.name !== "domshell") return;
 
   port.onMessage.addListener(async (msg) => {
     if (msg.type === "STDIN") {
@@ -400,9 +415,9 @@ chrome.runtime.onConnect.addListener((port) => {
 function formatWelcome(): string {
   return [
     "\x1b[36m\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557\x1b[0m",
-    "\x1b[36m\u2551\x1b[0m   \x1b[1;33mAgentShell v1.0.0\x1b[0m                                 \x1b[36m\u2551\x1b[0m",
+    "\x1b[36m\u2551\x1b[0m   \x1b[1;33mDOMShell v1.0.0\x1b[0m                                   \x1b[36m\u2551\x1b[0m",
     "\x1b[36m\u2551\x1b[0m   \x1b[37mThe browser is your filesystem.\x1b[0m                    \x1b[36m\u2551\x1b[0m",
-    "\x1b[36m\u2551\x1b[0m   \x1b[90mhttps://github.com/apireno/AgenticShell\x1b[0m            \x1b[36m\u2551\x1b[0m",
+    "\x1b[36m\u2551\x1b[0m   \x1b[90mhttps://github.com/apireno/DOMShell\x1b[0m                \x1b[36m\u2551\x1b[0m",
     "\x1b[36m\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d\x1b[0m",
     "",
     "\x1b[90mType 'help' to see available commands.\x1b[0m",
@@ -510,20 +525,27 @@ const COMMAND_HELP: Record<string, string> = {
     "",
     "\x1b[33mUsage:\x1b[0m cd [path]",
     "",
+    "\x1b[33mSpecial paths:\x1b[0m",
+    "  cd ~ or cd /       Go to browser root (windows/tabs level)",
+    "",
     "\x1b[33mBrowser paths:\x1b[0m",
-    "  cd ~ or cd /     Go to browser root",
-    "  cd tabs           Enter the tabs listing",
-    "  cd tabs/123       Enter tab 123 (transparent CDP attach)",
-    "  cd tabs/github    Switch to first tab matching 'github'",
-    "  cd windows        Enter the windows listing",
-    "  cd windows/1      Enter window 1's tab listing",
+    "  cd tabs            Enter the tabs listing",
+    "  cd tabs/123        Enter tab 123 (transparent CDP attach)",
+    "  cd tabs/github     Switch to first tab matching 'github'",
+    "  cd windows         Enter the windows listing",
+    "  cd windows/1       Enter window 1's tab listing",
     "",
     "\x1b[33mDOM paths (inside a tab):\x1b[0m",
-    "  cd navigation     Enter the 'navigation' container",
-    "  cd ..              Go up one level (from DOM root exits to browser level)",
-    "  cd main/form      Multi-level path",
-    "  cd ../sidebar     Go up then into 'sidebar'",
-    "  cd ../456         Switch from one tab to a sibling tab",
+    "  cd navigation      Enter the 'navigation' container",
+    "  cd ..               Go up one level (from DOM root exits to browser level)",
+    "  cd main/form       Multi-level path",
+    "  cd ../sidebar      Go up then into 'sidebar'",
+    "",
+    "\x1b[33mPath variables:\x1b[0m",
+    "  %here%             Expands to the focused tab (via its window path)",
+    "  cd %here%          Enter the active tab",
+    "  cd %here%/..       Go to the window containing the active tab",
+    "  cd %here%/main     Enter the active tab and cd into main",
   ].join("\r\n"),
 
   pwd: [
@@ -616,9 +638,11 @@ const COMMAND_HELP: Record<string, string> = {
     "",
     "\x1b[33mOptions:\x1b[0m",
     "  \x1b[32m--type ROLE\x1b[0m   Filter by AX role (e.g. --type combobox)",
+    "  \x1b[32m--meta\x1b[0m        Include DOM properties (href, src, id, tag) per result",
     "  \x1b[32m-n N\x1b[0m          Limit to first N results",
     "",
     "Searches the entire tree from CWD down. Shows the full path.",
+    "Use --meta with --type link to find all URLs on a page.",
   ].join("\r\n"),
 
   tree: [
@@ -700,11 +724,11 @@ const COMMAND_HELP: Record<string, string> = {
     "",
     "\x1b[33mExamples:\x1b[0m",
     "  open https://google.com",
-    "  open https://github.com/apireno/AgenticShell",
+    "  open https://github.com/apireno/DOMShell",
   ].join("\r\n"),
 
   connect: [
-    "\x1b[1;36mconnect\x1b[0m \u2014 Connect to an AgentShell MCP server via WebSocket",
+    "\x1b[1;36mconnect\x1b[0m \u2014 Connect to a DOMShell MCP server via WebSocket",
     "",
     "\x1b[33mUsage:\x1b[0m connect <token>",
     "",
@@ -714,7 +738,7 @@ const COMMAND_HELP: Record<string, string> = {
     "\x1b[33mSetup:\x1b[0m",
     "  1. Start the MCP server:  cd mcp-server && npx tsx index.ts",
     "  2. Copy the auth token from the server output",
-    "  3. In AgentShell:  connect <token>",
+    "  3. In DOMShell:  connect <token>",
     "",
     "\x1b[33mOptions:\x1b[0m",
     "  \x1b[32m--port N\x1b[0m   Connect to a custom port (default: 9876)",
@@ -840,7 +864,7 @@ async function executeCommand(raw: string): Promise<string> {
       case "clear":
         return "\x1b[2J\x1b[H";
       default:
-        return `\x1b[31magentshell: ${cmd}: command not found\x1b[0m\r\nType 'help' for available commands. Use '<command> --help' for details.`;
+        return `\x1b[31mdomshell: ${cmd}: command not found\x1b[0m\r\nType 'help' for available commands. Use '<command> --help' for details.`;
     }
   } catch (err: any) {
     return `\x1b[31mError: ${err.message}\x1b[0m`;
@@ -878,7 +902,7 @@ function parseCommandLine(input: string): string[] {
 
 function handleHelp(): string {
   return [
-    "\x1b[1;36mAgentShell \u2014 The browser is your filesystem\x1b[0m",
+    "\x1b[1;36mDOMShell \u2014 The browser is your filesystem\x1b[0m",
     "",
     "Use \x1b[33m<command> --help\x1b[0m for detailed usage of any command.",
     "",
@@ -887,6 +911,7 @@ function handleHelp(): string {
     "  \x1b[32mwindows\x1b[0m         List all browser windows with their tabs",
     "  \x1b[32mhere\x1b[0m            Jump to the active tab in the focused window",
     "  \x1b[32mcd tabs/<id>\x1b[0m    Enter a tab (by ID or name pattern)",
+    "  \x1b[32mcd %here%\x1b[0m       Enter the focused tab (composable: %here%/.., %here%/main)",
     "  \x1b[32mcd ~\x1b[0m or \x1b[32mcd /\x1b[0m    Go to browser root",
     "",
     "\x1b[1;33mNavigation:\x1b[0m",
@@ -922,7 +947,7 @@ function handleHelp(): string {
     "",
     "\x1b[90mType prefixes: [d]=directory [x]=interactive [-]=static\x1b[0m",
     "",
-    "\x1b[90mhttps://github.com/apireno/AgenticShell\x1b[0m",
+    "\x1b[90mhttps://github.com/apireno/DOMShell\x1b[0m",
     "",
   ].join("\r\n");
 }
@@ -988,6 +1013,11 @@ function getCompletions(partial: string, command: string): string[] {
   if (!command || command === partial) {
     const lower = partial.toLowerCase();
     return COMMANDS.filter((c) => c.startsWith(lower));
+  }
+
+  // Path variable completion for cd
+  if (command === "cd" && partial.startsWith("%")) {
+    return ["%here%"].filter((v) => v.startsWith(partial));
   }
 
   // For cd at browser level, complete browser-level names
@@ -1273,12 +1303,18 @@ function formatColoredName(node: VFSNode): string {
 // ---- cd (unified hierarchy) ----
 
 async function handleCd(args: string[]): Promise<string> {
-  const target = args.length > 0 ? args[0] : "";
+  let target = args.length > 0 ? args[0] : "";
+
+  // Expand path variables (%here%, etc.)
+  try {
+    target = await expandPathVariable(target);
+  } catch (err: any) {
+    return `\x1b[31m${err.message}\x1b[0m`;
+  }
 
   // cd / or cd ~ or cd (empty) — go to browser root
   if (target === "/" || target === "~" || target === "") {
     state.path = [];
-    // Don't detach CDP — keep it lazy for quick re-entry
     return "";
   }
 
@@ -1769,6 +1805,7 @@ async function handleFind(args: string[]): Promise<string> {
   const pa = parseArgs(args);
   const typeFilter = pa.named["--type"]?.toLowerCase();
   const limit = pa.named["-n"] ? parseInt(pa.named["-n"], 10) : 0;
+  const showMeta = pa.flags.has("--meta");
   const pattern = pa.positional[0]?.toLowerCase() ?? "";
 
   if (!pattern && !typeFilter) {
@@ -1784,15 +1821,27 @@ async function handleFind(args: string[]): Promise<string> {
     return `\x1b[33mNo matches for ${desc}\x1b[0m`;
   }
 
-  return results
-    .map((r) => {
-      const tp = typePrefix(r.node);
-      const coloredName = r.node.isDirectory
-        ? `\x1b[1;34m${r.node.name}/\x1b[0m`
-        : formatColoredName(r.node);
-      return `${tp} \x1b[90m${r.path}\x1b[0m${coloredName} \x1b[90m(${r.node.role})\x1b[0m`;
-    })
-    .join("\r\n");
+  const lines: string[] = [];
+  for (const r of results) {
+    const tp = typePrefix(r.node);
+    const coloredName = r.node.isDirectory
+      ? `\x1b[1;34m${r.node.name}/\x1b[0m`
+      : formatColoredName(r.node);
+    let meta = "";
+    if (showMeta && r.node.backendDOMNodeId) {
+      try {
+        const props = await cdp.getElementProperties(r.node.backendDOMNodeId);
+        const parts: string[] = [];
+        if (props.href) parts.push(`href=${props.href}`);
+        if (props.src) parts.push(`src=${props.src}`);
+        if (props.id) parts.push(`id=${props.id}`);
+        if (props.tag) parts.push(`<${props.tag}>`);
+        if (parts.length > 0) meta = `  \x1b[90m${parts.join(" ")}\x1b[0m`;
+      } catch { /* stale node */ }
+    }
+    lines.push(`${tp} \x1b[90m${r.path}\x1b[0m${coloredName} \x1b[90m(${r.node.role})\x1b[0m${meta}`);
+  }
+  return lines.join("\r\n");
 }
 
 function findRecursive(

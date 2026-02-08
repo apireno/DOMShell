@@ -3,7 +3,7 @@ import { Terminal as XTerminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 
-const PROMPT = "\x1b[1;32magent\x1b[0m@\x1b[1;34mshell\x1b[0m:\x1b[1;33m$\x1b[0m ";
+const PROMPT = "\x1b[1;32mdom\x1b[0m@\x1b[1;34mshell\x1b[0m:\x1b[1;33m$\x1b[0m ";
 
 export default function Terminal() {
   const termRef = useRef<HTMLDivElement>(null);
@@ -59,7 +59,7 @@ export default function Terminal() {
     xtermRef.current = term;
 
     // Connect to background service worker
-    const port = chrome.runtime.connect({ name: "agentshell" });
+    const port = chrome.runtime.connect({ name: "domshell" });
     portRef.current = port;
 
     // Handle messages from the background

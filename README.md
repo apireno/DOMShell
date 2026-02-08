@@ -1,12 +1,41 @@
-# AgentShell
+# DOMShell
+
+```
+         . * .
+        * ╲|╱ *
+       .  ─O─  .
+        * ╱|╲ *
+         ' * '
+          ╱╲
+         ╱  ╲
+        ╱    ╲
+       ╱  ╔══╗╲
+      ╱   ║  ║ ╲
+     ╱    ╚══╝  ╲
+    ╱             ╲
+   │    D O M      │
+   │   S H E L L   │
+   │               │
+   │  the browser  │
+   │  is your      │
+   │  filesystem   │
+    ╲             ╱
+     ╲           ╱
+      ╲         ╱
+       ╲       ╱
+        ╲     ╱
+         ╲   ╱
+          ╲ ╱
+           V
+```
 
 **The browser is your filesystem.** A Chrome Extension that lets AI agents (and humans) browse the web using standard Linux commands — `ls`, `cd`, `cat`, `grep`, `click` — via a terminal in the Chrome Side Panel.
 
-AgentShell maps the browser into a virtual filesystem. Windows and tabs become top-level directories (`~`). Each tab's Accessibility Tree becomes a nested filesystem where container elements are directories and buttons, links, and inputs are files. Navigate Chrome the same way you'd navigate `/usr/local/bin`.
+DOMShell maps the browser into a virtual filesystem. Windows and tabs become top-level directories (`~`). Each tab's Accessibility Tree becomes a nested filesystem where container elements are directories and buttons, links, and inputs are files. Navigate Chrome the same way you'd navigate `/usr/local/bin`.
 
 ## Why
 
-AI agents that interact with websites typically rely on screenshots, pixel coordinates, or brittle CSS selectors. AgentShell takes a different approach: it exposes the browser's own Accessibility Tree as a familiar filesystem metaphor.
+AI agents that interact with websites typically rely on screenshots, pixel coordinates, or brittle CSS selectors. DOMShell takes a different approach: it exposes the browser's own Accessibility Tree as a familiar filesystem metaphor.
 
 This means an agent can:
 - **Browse** tabs with `ls ~/tabs/` and switch with `cd ~/tabs/123` instead of guessing which tab is active
@@ -23,8 +52,8 @@ The filesystem abstraction is deterministic, semantic, and works on any website 
 ### From Source
 
 ```bash
-git clone https://github.com/apireno/AgenticShell.git
-cd AgentShell
+git clone https://github.com/apireno/DOMShell.git
+cd DOMShell
 npm install
 npm run build
 ```
@@ -35,34 +64,34 @@ npm run build
 2. Enable **Developer mode** (toggle in top right)
 3. Click **Load unpacked**
 4. Select the `dist/` folder
-5. Click the AgentShell icon in your toolbar — the side panel opens
+5. Click the DOMShell icon in your toolbar — the side panel opens
 
 ## Usage
 
 ### Getting Started
 
-Open any webpage, then open the AgentShell side panel. You'll see a terminal:
+Open any webpage, then open the DOMShell side panel. You'll see a terminal:
 
 ```
 ╔══════════════════════════════════════╗
-║   AgentShell v1.0.0                  ║
+║   DOMShell v1.0.0                    ║
 ║   The browser is your filesystem.    ║
 ╚══════════════════════════════════════╝
 
 Type 'help' to see available commands.
 Type 'tabs' to see open browser tabs, then 'cd tabs/<id>' to enter one.
 
-agent@shell:~$
+dom@shell:~$
 ```
 
 You start at `~` (the browser root). Jump straight to the active tab with `here`, or explore:
 
 ```
-agent@shell:~$ ls
+dom@shell:~$ ls
   windows/       (2 windows)
   tabs/          (5 tabs)
 
-agent@shell:~$ here
+dom@shell:~$ here
 ✓ Entered tab 123
   Title: Google
   URL:   https://google.com
@@ -73,33 +102,33 @@ agent@shell:~$ here
 
 ```bash
 # List all open tabs
-agent@shell:~$ tabs
+dom@shell:~$ tabs
   ID     TITLE                       URL                        WIN
   123    Google                       google.com                 1
   124    GitHub - apireno             github.com/apireno         1
   125    Wikipedia                    en.wikipedia.org                 2
 
 # Switch to a tab by ID
-agent@shell:~$ cd tabs/125
+dom@shell:~$ cd tabs/125
 ✓ Entered tab 125
   Title: Wikipedia
   URL:   https://en.wikipedia.org
   AX Nodes: 312
 
 # You're now inside the tab's DOM tree
-agent@shell:~$ pwd
+dom@shell:~$ pwd
 ~/tabs/125
 
 # Go back to browser level
-agent@shell:~$ cd ~
-agent@shell:~$
+dom@shell:~$ cd ~
+dom@shell:~$
 
 # Or use substring matching
-agent@shell:~$ cd tabs/github
+dom@shell:~$ cd tabs/github
 ✓ Entered tab 124 (GitHub - apireno)
 
 # List windows (shows tabs grouped under each window)
-agent@shell:~$ windows
+dom@shell:~$ windows
 Window 1 (focused)
 ├── *123   Google                        google.com
 ├──  124   GitHub - apireno              github.com/apireno
@@ -110,8 +139,8 @@ Window 2
 └──  127   MDN Web Docs                  developer.mozilla.org
 
 # Browse a specific window's tabs
-agent@shell:~$ cd windows/2
-agent@shell:~/windows/2$ ls
+dom@shell:~$ cd windows/2
+dom@shell:~/windows/2$ ls
   ID     TITLE                       URL
   125    Wikipedia                    en.wikipedia.org
   126    LinkedIn                     linkedin.com
@@ -121,10 +150,10 @@ You can also navigate or open new tabs:
 
 ```bash
 # Navigate the current tab to a URL (requires being inside a tab)
-agent@shell:~$ navigate https://example.com
+dom@shell:~$ navigate https://example.com
 
 # Open a URL in a new tab (works from anywhere)
-agent@shell:~$ open https://github.com
+dom@shell:~$ open https://github.com
 ✓ Opened new tab
   URL:   https://github.com
   Title: GitHub
@@ -137,7 +166,7 @@ Once you're inside a tab, the Accessibility Tree appears as a filesystem:
 
 ```bash
 # List children of the current node
-agent@shell:~$ ls
+dom@shell:~$ ls
 navigation/
 main/
 complementary/
@@ -146,45 +175,50 @@ skip_to_content_link
 logo_link
 
 # Long format shows type prefixes and roles
-agent@shell:~$ ls -l
+dom@shell:~$ ls -l
 [d] navigation     navigation/
 [d] main           main/
 [x] link           skip_to_content_link
 [x] link           logo_link
 
 # Filter by type
-agent@shell:~$ ls --type link
+dom@shell:~$ ls --type link
 skip_to_content_link
 logo_link
 
 # Show DOM metadata (href, src, id) inline — great for finding URLs
-agent@shell:~$ ls --meta --type link
+dom@shell:~$ ls --meta --type link
 [x] link           skip_to_content_link  href=https://example.com/#content <a>
 [x] link           logo_link             href=https://example.com/ <a>
 
 # Paginate large directories
-agent@shell:~$ ls -n 10              # First 10 items
-agent@shell:~$ ls -n 10 --offset 10  # Items 11-20
+dom@shell:~$ ls -n 10              # First 10 items
+dom@shell:~$ ls -n 10 --offset 10  # Items 11-20
 
 # Count children by type
-agent@shell:~$ ls --count
+dom@shell:~$ ls --count
 45 total (12 [d], 28 [x], 5 [-])
 
 # Enter a directory (container element)
-agent@shell:~$ cd navigation
+dom@shell:~$ cd navigation
 
 # See where you are
-agent@shell:~$ pwd
+dom@shell:~$ pwd
 ~/tabs/125/navigation
 
 # Go back up
-agent@shell:~$ cd ..
+dom@shell:~$ cd ..
 
 # Jump to browser root
-agent@shell:~$ cd ~
+dom@shell:~$ cd ~
 
 # Multi-level paths work too
-agent@shell:~$ cd main/article/form
+dom@shell:~$ cd main/article/form
+
+# Path variable: %here% expands to the focused tab (via its window)
+dom@shell:~$ cd %here%           # Enter the active tab
+dom@shell:~$ cd %here%/..        # Go to the window containing the active tab
+dom@shell:~$ cd %here%/main      # Enter the active tab and cd into main
 ```
 
 ### Type Prefixes
@@ -201,7 +235,7 @@ Every node has a type prefix that communicates metadata without relying on color
 
 ```bash
 # Inspect an element — cat shows full AX + DOM metadata
-agent@shell:~$ cat submit_btn
+dom@shell:~$ cat submit_btn
 --- submit_btn ---
   Role:  button
   Type:  [x] interactive
@@ -214,7 +248,7 @@ agent@shell:~$ cat submit_btn
   HTML:  <button id="submit-form" class="btn btn-primary">Submit Form</button>
 
 # cat on a link reveals the href URL
-agent@shell:~$ cat Read_more
+dom@shell:~$ cat Read_more
 --- Read_more ---
   Role:  link
   Type:  [x] interactive
@@ -226,25 +260,25 @@ agent@shell:~$ cat Read_more
   HTML:  <a href="https://en.wikipedia.org/wiki/Article_Title">Read more</a>
 
 # Navigate to parent to find its properties (e.g. span inside a link)
-agent@shell:~$ cd ..
-agent@shell:~$ cat parent_link
+dom@shell:~$ cd ..
+dom@shell:~$ cat parent_link
 
 # Bulk extract ALL text from a section (one call instead of 50+ cat calls)
-agent@shell:/main$ text
+dom@shell:/main$ text
 [textContent of /main — 4,821 chars]
 Heading: Welcome to Our Site
 Today we announce the launch of our new product...
 (full article text continues)
 
 # Extract text from a specific child
-agent@shell:~$text main
+dom@shell:~$text main
 [textContent of main — 4,821 chars]
 
 # Limit output length
-agent@shell:~$text main -n 500
+dom@shell:~$text main -n 500
 
 # Get a tree view (default depth: 2)
-agent@shell:~$tree
+dom@shell:~$tree
 navigation/
 ├── [x] home_link
 ├── [x] about_link
@@ -252,78 +286,83 @@ navigation/
 └── [x] contact_link
 
 # Deeper tree
-agent@shell:~$tree 4
+dom@shell:~$tree 4
 ```
 
 ### Searching
 
 ```bash
 # Search current directory
-agent@shell:~$grep login
+dom@shell:~$grep login
 [x] login_btn (button)
 [d] login_form (form)
 [x] login_link (link)
 
 # Recursive search across all descendants
-agent@shell:~$grep -r search
+dom@shell:~$grep -r search
 [x] search_search (combobox)
 [x] search_btn (button)
 
 # Limit results
-agent@shell:~$grep -r -n 5 link
+dom@shell:~$grep -r -n 5 link
 
 # Deep search with full paths (like Unix find)
-agent@shell:~$find search
+dom@shell:~$find search
 [x] /search_2/search_search (combobox)
 [x] /search_2/search_btn (button)
 
 # Find by role type
-agent@shell:~$find --type combobox
+dom@shell:~$find --type combobox
 [x] /search_2/search_search (combobox)
 
-agent@shell:~$find --type textbox
+dom@shell:~$find --type textbox
 [x] /main/form/email_input (textbox)
 [x] /main/form/name_input (textbox)
 
 # Limit results
-agent@shell:~$find --type link -n 5
+dom@shell:~$find --type link -n 5
+
+# Find all links with their URLs (great for content extraction)
+dom@shell:~$find --type link --meta
+[x] /nav/home_link (link)  href=https://example.com/ <a>
+[x] /main/Read_more (link)  href=https://example.com/article <a>
 ```
 
 ### Interacting with Elements
 
 ```bash
 # Click a button or link
-agent@shell:~$click submit_btn
+dom@shell:~$click submit_btn
 ✓ Clicked: submit_btn (button)
 (tree will auto-refresh on next command)
 
 # Focus an input field
-agent@shell:~$focus email_input
+dom@shell:~$focus email_input
 ✓ Focused: email_input
 
 # Type into the focused field
-agent@shell:~$type hello@example.com
+dom@shell:~$type hello@example.com
 ✓ Typed 17 characters
 
 # Navigate to a URL (current tab)
-agent@shell:~$navigate https://example.com
+dom@shell:~$navigate https://example.com
 ✓ Navigated to https://example.com
 
 # Open a URL in a new tab
-agent@shell:~$open https://github.com
+dom@shell:~$open https://github.com
 ✓ Opened new tab → https://github.com
 ```
 
 ### Auto-Refresh on DOM Changes
 
-AgentShell automatically detects when the page changes — navigation, DOM mutations, or content updates from clicks. You no longer need to manually run `refresh`:
+DOMShell automatically detects when the page changes — navigation, DOM mutations, or content updates from clicks. You no longer need to manually run `refresh`:
 
 ```bash
-agent@shell:~$click search_btn
+dom@shell:~$click search_btn
 ✓ Clicked: search_btn (button)
 (tree will auto-refresh on next command)
 
-agent@shell:~$ls
+dom@shell:~$ls
 (page changed — tree refreshed, 312 nodes, path reset to tab root)
 main/
 navigation/
@@ -334,7 +373,7 @@ search_results/
 If the page navigated, CWD is reset to the tab root. If the DOM just updated in place, your CWD is preserved. You can still force a manual refresh:
 
 ```bash
-agent@shell:~$refresh
+dom@shell:~$refresh
 ✓ Refreshed. 312 AX nodes loaded.
 ```
 
@@ -343,13 +382,13 @@ agent@shell:~$refresh
 Press `Tab` to auto-complete commands and element names — works like bash:
 
 ```bash
-agent@shell:$ ta<Tab>
+dom@shell:$ ta<Tab>
 # completes to: tabs
 
-agent@shell:$ cd nav<Tab>
+dom@shell:$ cd nav<Tab>
 # completes to: cd navigation/
 
-agent@shell:$ click sub<Tab>
+dom@shell:$ click sub<Tab>
 # if multiple matches, shows options:
 #   submit_btn
 #   subscribe_link
@@ -367,7 +406,7 @@ Cmd+V (Mac) / Ctrl+V (Windows/Linux) pastes text directly into the terminal. Mul
 
 ```bash
 # Check if you're authenticated (reads cookies)
-agent@shell:~$whoami
+dom@shell:~$whoami
 URL: https://example.com
 Status: Authenticated
 Via: session_id
@@ -375,15 +414,15 @@ Expires: 2025-12-31T00:00:00.000Z
 Total cookies: 12
 
 # Environment variables
-agent@shell:~$env
-SHELL=/bin/agentshell
+dom@shell:~$env
+SHELL=/bin/domshell
 TERM=xterm-256color
 
 # Set a variable
-agent@shell:~$export API_KEY=sk-abc123
+dom@shell:~$export API_KEY=sk-abc123
 
 # Debug the raw AX tree
-agent@shell:~$debug stats
+dom@shell:~$debug stats
 --- Debug Stats ---
   Total AX nodes:   247
   Ignored nodes:    83
@@ -397,7 +436,7 @@ agent@shell:~$debug stats
 Every command supports `--help`:
 
 ```bash
-agent@shell:$ ls --help
+dom@shell:$ ls --help
 ls — List children of the current node
 
 Usage: ls [options]
@@ -433,13 +472,13 @@ Options:
 | Command | Description |
 |---|---|
 | `ls [options]` | List children (`-l`, `--meta`, `-r`, `-n N`, `--offset N`, `--type ROLE`, `--count`) |
-| `cd <path>` | Navigate (`..`, `/` for root, `~` for browser, `main/form` for multi-level) |
+| `cd <path>` | Navigate (`..`, `~` or `/` for browser root, `%here%` for focused tab, `main/form` for multi-level) |
 | `pwd` | Print current path (DOM path or browser path) |
 | `tree [depth]` | Tree view of current node (default depth: 2) |
 | `cat <name>` | Full element metadata: AX info + DOM properties (tag, href, src, id, class, outerHTML) |
 | `text [name] [-n N]` | Bulk extract all text from a section (much faster than multiple `cat`) |
 | `grep [opts] <pattern>` | Search children by name/role/value (`-r` recursive, `-n N` limit) |
-| `find [opts] <pattern>` | Deep recursive search with full paths (`--type ROLE`, `-n N`) |
+| `find [opts] <pattern>` | Deep recursive search with full paths (`--type ROLE`, `--meta`, `-n N`) |
 | `click <name>` | Click an element (falls back to coordinate-based click) |
 | `focus <name>` | Focus an input element |
 | `type <text>` | Type text into the focused element |
@@ -460,7 +499,7 @@ Options:
 
 ## How the Filesystem Mapping Works
 
-AgentShell maps the browser into a two-level virtual filesystem:
+DOMShell maps the browser into a two-level virtual filesystem:
 
 ### Browser Level (`~`)
 
@@ -507,11 +546,11 @@ Duplicate names are automatically disambiguated with `_2`, `_3`, etc.
 
 ### Node Flattening
 
-The AX tree contains many "wrapper" nodes — ignored nodes, unnamed generics, and role=none elements that add structural noise without semantic meaning. AgentShell recursively flattens through these, promoting their children up so you see the meaningful elements without navigating through layers of invisible divs.
+The AX tree contains many "wrapper" nodes — ignored nodes, unnamed generics, and role=none elements that add structural noise without semantic meaning. DOMShell recursively flattens through these, promoting their children up so you see the meaningful elements without navigating through layers of invisible divs.
 
 ### Iframe Support
 
-AgentShell discovers iframes via `Page.getFrameTree` and fetches each iframe's AX tree separately. Iframe nodes are merged into the main tree with prefixed IDs to avoid collisions, so elements inside iframes appear naturally in the filesystem.
+DOMShell discovers iframes via `Page.getFrameTree` and fetches each iframe's AX tree separately. Iframe nodes are merged into the main tree with prefixed IDs to avoid collisions, so elements inside iframes appear naturally in the filesystem.
 
 ### Color Coding
 
@@ -617,7 +656,7 @@ After building, reload the extension on `chrome://extensions/` and reopen the si
 
 ## Connecting Claude Desktop (MCP Server)
 
-AgentShell includes a hardened MCP server that lets Claude Desktop (or any MCP-compatible client) control the browser through AgentShell commands.
+DOMShell includes a hardened MCP server that lets Claude Desktop (or any MCP-compatible client) control the browser through DOMShell commands.
 
 ### Architecture
 
@@ -647,9 +686,9 @@ Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_
 ```json
 {
   "mcpServers": {
-    "agentshell": {
+    "domshell": {
       "command": "npx",
-      "args": ["tsx", "/absolute/path/to/AgenticShell/mcp-server/index.ts", "--allow-write", "--no-confirm", "--token", "my-secret-token"],
+      "args": ["tsx", "/absolute/path/to/DOMShell/mcp-server/index.ts", "--allow-write", "--no-confirm", "--token", "my-secret-token"],
       "env": {}
     }
   }
@@ -658,12 +697,12 @@ Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_
 
 > **Note:** Use an absolute path (not `~`). The `--token` flag lets you set a known token so you can configure both sides without copy-pasting. The `--no-confirm` flag is recommended for Claude Desktop since the MCP server has no terminal for interactive confirmation prompts.
 
-Restart Claude Desktop. AgentShell tools will appear.
+Restart Claude Desktop. DOMShell tools will appear.
 
 **3. Connect the extension (Options Page):**
 
 1. Go to `chrome://extensions/`
-2. Find **AgentShell** and click **Options** (or right-click the extension icon → Options)
+2. Find **DOMShell** and click **Options** (or right-click the extension icon → Options)
 3. Enable the **MCP Bridge** toggle
 4. Paste the same token you used in the Claude Desktop config (`my-secret-token`)
 5. Click **Save** — the status indicator turns green when connected
@@ -672,10 +711,10 @@ The options page shows live connection status: **Disabled**, **Connecting**, **C
 
 **Alternative: Connect via terminal**
 
-You can also connect from the AgentShell terminal instead of the options page:
+You can also connect from the DOMShell terminal instead of the options page:
 
 ```bash
-agent@shell:$ connect my-secret-token
+dom@shell:$ connect my-secret-token
 ```
 
 **4. Test it:**
@@ -715,7 +754,7 @@ The **Navigate** tier is separate from Write because navigation is equivalent to
 When write commands are enabled, the MCP server prompts in its terminal before executing:
 
 ```
-[AgentShell] Claude wants to: click submit_btn
+[DOMShell] Claude wants to: click submit_btn
 Allow? (y/n):
 ```
 
@@ -749,10 +788,10 @@ Every command is logged with timestamps to `audit.log` (or `--log-file`):
 
 #### Disconnecting
 
-Disable the MCP Bridge toggle in the extension options page, or run `disconnect` in the AgentShell terminal:
+Disable the MCP Bridge toggle in the extension options page, or run `disconnect` in the DOMShell terminal:
 
 ```bash
-agent@shell:$ disconnect
+dom@shell:$ disconnect
 ✓ Disconnected from MCP server.
 ```
 
@@ -760,24 +799,24 @@ agent@shell:$ disconnect
 
 | MCP Tool | Maps To | Tier |
 |----------|---------|------|
-| `agentshell_tabs` | `tabs` (list all tabs) | Read |
-| `agentshell_here` | `here` (jump to active tab) | Read |
-| `agentshell_ls` | `ls [options]` (DOM or browser level) | Read |
-| `agentshell_cd` | `cd <path>` (`~`, `~/tabs/`, `/`, `..`) | Read |
-| `agentshell_pwd` | `pwd` | Read |
-| `agentshell_cat` | `cat <name>` | Read |
-| `agentshell_text` | `text [name] [-n N]` (bulk text extraction) | Read |
-| `agentshell_find` | `find [pattern] [--type ROLE] [-n N]` | Read |
-| `agentshell_grep` | `grep [-r] [-n N] <pattern>` | Read |
-| `agentshell_tree` | `tree [depth]` | Read |
-| `agentshell_refresh` | `refresh` | Read |
-| `agentshell_navigate` | `navigate <url>` (current tab) | Navigate |
-| `agentshell_open` | `open <url>` (new tab) | Navigate |
-| `agentshell_click` | `click <name>` | Write |
-| `agentshell_focus` | `focus <name>` | Write |
-| `agentshell_type` | `type <text>` | Write |
-| `agentshell_whoami` | `whoami` | Sensitive |
-| `agentshell_execute` | *(any command)* | Varies |
+| `domshell_tabs` | `tabs` (list all tabs) | Read |
+| `domshell_here` | `here` (jump to active tab) | Read |
+| `domshell_ls` | `ls [options]` (DOM or browser level) | Read |
+| `domshell_cd` | `cd <path>` (`~`, `~/tabs/`, `/`, `..`) | Read |
+| `domshell_pwd` | `pwd` | Read |
+| `domshell_cat` | `cat <name>` | Read |
+| `domshell_text` | `text [name] [-n N]` (bulk text extraction) | Read |
+| `domshell_find` | `find [pattern] [--type ROLE] [--meta] [-n N]` | Read |
+| `domshell_grep` | `grep [-r] [-n N] <pattern>` | Read |
+| `domshell_tree` | `tree [depth]` | Read |
+| `domshell_refresh` | `refresh` | Read |
+| `domshell_navigate` | `navigate <url>` (current tab) | Navigate |
+| `domshell_open` | `open <url>` (new tab) | Navigate |
+| `domshell_click` | `click <name>` | Write |
+| `domshell_focus` | `focus <name>` | Write |
+| `domshell_type` | `type <text>` | Write |
+| `domshell_whoami` | `whoami` | Sensitive |
+| `domshell_execute` | *(any command)* | Varies |
 
 ## Roadmap
 
@@ -785,7 +824,7 @@ agent@shell:$ disconnect
 
 - [ ] **Chrome Web Store listing** — publish to the store for one-click install
 - [ ] **GitHub release with .crx** — downloadable extension package for sideloading
-- [ ] **MCP setup wizard** — an `npx agentshell init` command (or in-extension prompt) that generates the Claude Desktop JSON config, sets a shared token, and writes it to `claude_desktop_config.json` automatically
+- [ ] **MCP setup wizard** — an `npx domshell init` command (or in-extension prompt) that generates the Claude Desktop JSON config, sets a shared token, and writes it to `claude_desktop_config.json` automatically
 - [ ] **Support for other MCP clients** — Gemini Desktop, OpenAI ChatGPT desktop, Cursor, Windsurf, and other MCP-compatible hosts
 
 ### New Commands
@@ -816,13 +855,14 @@ agent@shell:$ disconnect
 
 ### Platform
 
+- [ ] **Standalone headless browser** — ship DOMShell as a self-contained headless Chromium process (via [Chrome for Testing](https://googlechromelabs.github.io/chrome-for-testing/) or embedded Chromium) that agents launch directly — no extension install, no user Chrome profile; just `npx domshell --headless` and connect via MCP. Ideal for CI pipelines, server-side automation, and agent-in-a-loop workflows where a visible browser isn't needed
 - [ ] **Firefox extension** — port to Firefox using WebExtensions API + remote debugging protocol
 - [ ] **Playwright/Puppeteer backend** — alternative to Chrome extension for headless agent workflows
-- [ ] **REST API mode** — expose AgentShell commands over HTTP for non-MCP integrations
+- [ ] **REST API mode** — expose DOMShell commands over HTTP for non-MCP integrations
 
 ## How This Project Was Built
 
-The technical specification for AgentShell was authored by **Google Gemini**, designed as a comprehensive prompt that could be handed directly to a coding agent to scaffold and build the entire project from scratch. The full original specification is preserved in [`intitial_project_prompt.md`](intitial_project_prompt.md).
+The technical specification for DOMShell was authored by **Google Gemini**, designed as a comprehensive prompt that could be handed directly to a coding agent to scaffold and build the entire project from scratch. The full original specification is preserved in [`intitial_project_prompt.md`](intitial_project_prompt.md).
 
 The implementation was then built by **Claude** (Anthropic) via [Claude Code](https://claude.ai/code), working from that specification.
 

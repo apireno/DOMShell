@@ -5,6 +5,7 @@ import {
   findRootNode,
   generateNodeName,
   getChildVFSNodes,
+  resolveByPath,
 } from "./vfs_mapper.ts";
 import type { AXNode, ShellState, VFSNode } from "../shared/types.ts";
 import { INTERACTIVE_ROLES } from "../shared/types.ts";
@@ -523,6 +524,8 @@ const COMMAND_HELP: Record<string, string> = {
     "  \x1b[32m--offset N\x1b[0m      Skip first N entries (for pagination)",
     "  \x1b[32m--type ROLE\x1b[0m     Filter by AX role (e.g. --type button)",
     "  \x1b[32m--count\x1b[0m         Show count of children only",
+    "  \x1b[32m--after NAME\x1b[0m    Show only children after the named element",
+    "  \x1b[32m--before NAME\x1b[0m   Show only children before the named element",
     "",
     "\x1b[33mType Prefixes (in long format):\x1b[0m",
     "  [d]  Directory (container node, cd-able)",
@@ -584,6 +587,8 @@ const COMMAND_HELP: Record<string, string> = {
     "  target, name, text content (textContent), visible text (innerText),",
     "  and an outer HTML snippet.",
     "",
+    "Accepts a name or relative path (e.g. cat main/article/link_name).",
+    "",
     "Use 'cd ..' to navigate to a parent element if you need",
     "its properties (e.g. navigate up from a span to its <a> for href).",
     "",
@@ -596,8 +601,10 @@ const COMMAND_HELP: Record<string, string> = {
     "\x1b[33mUsage:\x1b[0m text [name] [-n N]",
     "",
     "\x1b[33mArguments:\x1b[0m",
-    "  name         Extract text from a specific child (default: current directory)",
+    "  name         Extract text from a specific child or path (default: current directory)",
     "  -n N         Limit output to first N characters",
+    "",
+    "Accepts a name or relative path (e.g. text main/article/paragraph).",
     "",
     "Uses the DOM's textContent property, which returns all descendant text",
     "in a single call. Much faster than calling 'cat' on each element.",
@@ -613,6 +620,7 @@ const COMMAND_HELP: Record<string, string> = {
     "",
     "\x1b[33mUsage:\x1b[0m click <name>",
     "",
+    "Accepts a name or relative path (e.g. click form/submit_btn).",
     "Resolves the node to a DOM element and triggers a click.",
     "Falls back to coordinate-based click if JS click fails.",
   ].join("\r\n"),
@@ -622,6 +630,7 @@ const COMMAND_HELP: Record<string, string> = {
     "",
     "\x1b[33mUsage:\x1b[0m focus <name>",
     "",
+    "Accepts a name or relative path (e.g. focus form/search_input).",
     "Focuses the DOM element. Use before 'type' to direct keyboard input.",
   ].join("\r\n"),
 
@@ -643,6 +652,7 @@ const COMMAND_HELP: Record<string, string> = {
     "",
     "\x1b[33mUsage:\x1b[0m submit <input_name> <value> [--submit button_name]",
     "",
+    "Accepts names or relative paths for input and button.",
     "Focuses the input, clears existing value, types the new value,",
     "then either clicks the submit button or presses Enter.",
     "",
@@ -656,6 +666,7 @@ const COMMAND_HELP: Record<string, string> = {
     "",
     "\x1b[33mUsage:\x1b[0m extract_links [element_name] [-n limit]",
     "",
+    "Accepts a name or relative path (e.g. extract_links main/sidebar).",
     "Recursively finds all link elements and returns their",
     "display text and URLs in markdown link format.",
     "",
@@ -669,6 +680,7 @@ const COMMAND_HELP: Record<string, string> = {
     "",
     "\x1b[33mUsage:\x1b[0m extract_table <table_name> [--format markdown|csv] [-n limit]",
     "",
+    "Accepts a name or relative path (e.g. extract_table main/table_1234).",
     "Reads all rows and cells of a table element and returns",
     "structured output. First row is treated as the header.",
     "",
@@ -698,6 +710,11 @@ const COMMAND_HELP: Record<string, string> = {
     "  grep -r heading   \u2192  cd target_section/ \u2192  text",
     "",
     "grep tells you WHERE things are. cd + text/find gets the content.",
+    "",
+    "\x1b[33mPipe support:\x1b[0m",
+    "  find --type link --meta | grep login     Filter find results",
+    "  ls --text | grep keyword                 Filter ls output",
+    "  text | grep pattern                      Search within text output",
   ].join("\r\n"),
 
   find: [
@@ -742,6 +759,7 @@ const COMMAND_HELP: Record<string, string> = {
     "  \x1b[32m--text\x1b[0m        Include visible text preview per element",
     "  \x1b[32m--textlen N\x1b[0m   Max chars for text preview (default: 120)",
     "",
+    "Accepts a name or relative path (e.g. read main/article).",
     "Returns the hierarchy of elements with roles, names, and values.",
     "Excellent for tables, lists, and nested sections — get structure",
     "AND content in one call instead of multiple text/cat calls.",
@@ -854,6 +872,19 @@ const COMMAND_HELP: Record<string, string> = {
     "",
     "Closes the WebSocket bridge and clears the stored auth token.",
   ].join("\r\n"),
+
+  head: [
+    "\x1b[1;36mhead\x1b[0m \u2014 Show first N lines (pipe consumer only)",
+    "",
+    "\x1b[33mUsage:\x1b[0m command | head -n N",
+    "",
+    "Only works as a pipe consumer. Shows the first N lines of piped output.",
+    "Default: 10 lines.",
+    "",
+    "\x1b[33mExamples:\x1b[0m",
+    "  find --type heading | head -n 5     First 5 headings",
+    "  ls --text | head -n 3               First 3 children with text",
+  ].join("\r\n"),
 };
 
 // ---- Arg Parsing Utility ----
@@ -880,7 +911,7 @@ function parseArgs(args: string[]): ParsedArgs {
       flags.add("-r");
     } else if (a === "--count") {
       flags.add("--count");
-    } else if ((a === "-n" || a === "-d" || a === "--offset" || a === "--type" || a === "--textlen" || a === "--format" || a === "--submit") && i + 1 < args.length) {
+    } else if ((a === "-n" || a === "-d" || a === "--offset" || a === "--type" || a === "--textlen" || a === "--format" || a === "--submit" || a === "--after" || a === "--before") && i + 1 < args.length) {
       named[a] = args[++i];
     } else if (a.startsWith("-")) {
       flags.add(a);
@@ -895,9 +926,70 @@ function parseArgs(args: string[]): ParsedArgs {
 
 // ---- Command Parser ----
 
+function splitOnPipe(input: string): string[] {
+  const segments: string[] = [];
+  let current = "";
+  let inQuote: string | null = null;
+  for (const char of input) {
+    if (inQuote) {
+      current += char;
+      if (char === inQuote) inQuote = null;
+    } else if (char === '"' || char === "'") {
+      inQuote = char;
+      current += char;
+    } else if (char === "|") {
+      if (current.trim()) segments.push(current.trim());
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  if (current.trim()) segments.push(current.trim());
+  return segments;
+}
+
+function grepLines(output: string, pattern: string, limit: number): string {
+  const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
+  const lines = output.split("\r\n").filter(Boolean);
+  const matches: string[] = [];
+  for (const line of lines) {
+    if (stripAnsi(line).toLowerCase().includes(pattern.toLowerCase())) {
+      matches.push(line);
+      if (limit > 0 && matches.length >= limit) break;
+    }
+  }
+  return matches.length > 0 ? matches.join("\r\n") : "\x1b[90m(no matches)\x1b[0m";
+}
+
 async function executeCommand(raw: string): Promise<string> {
   const trimmed = raw.trim();
   if (!trimmed) return "";
+
+  // Pipe support: split on | and chain outputs
+  const pipeSegments = splitOnPipe(trimmed);
+  if (pipeSegments.length > 1) {
+    let currentOutput = await executeCommand(pipeSegments[0]);
+    for (let i = 1; i < pipeSegments.length; i++) {
+      const pipeCmd = parseCommandLine(pipeSegments[i]);
+      const pipeName = pipeCmd[0]?.toLowerCase();
+      const pipeArgs = pipeCmd.slice(1);
+      if (pipeName === "grep") {
+        const pa = parseArgs(pipeArgs);
+        const pattern = pa.positional[0] || "";
+        const limit = pa.named["-n"] ? parseInt(pa.named["-n"], 10) : 0;
+        if (!pattern) return "\x1b[31mgrep: missing pattern\x1b[0m";
+        currentOutput = grepLines(currentOutput, pattern, limit);
+      } else if (pipeName === "head") {
+        const pa = parseArgs(pipeArgs);
+        const n = pa.named["-n"] ? parseInt(pa.named["-n"], 10) : 10;
+        const lines = currentOutput.split("\r\n").filter(Boolean);
+        currentOutput = lines.slice(0, n).join("\r\n");
+      } else {
+        return `\x1b[31mPipe: '${pipeName}' not supported as pipe consumer. Use grep or head.\x1b[0m`;
+      }
+    }
+    return currentOutput;
+  }
 
   const parts = parseCommandLine(trimmed);
   const cmd = parts[0].toLowerCase();
@@ -1213,6 +1305,20 @@ async function handleLs(args: string[]): Promise<string> {
       }
     }
     children = [...children, ...extra];
+  }
+
+  // Sibling filter: --after and --before (applied before type filter so landmarks are findable)
+  const afterName = pa.named["--after"];
+  const beforeName = pa.named["--before"];
+  if (afterName) {
+    const idx = children.findIndex((c) => c.name === afterName);
+    if (idx === -1) return `\x1b[31mls: --after ${afterName}: No such child element\x1b[0m`;
+    children = children.slice(idx + 1);
+  }
+  if (beforeName) {
+    const idx = children.findIndex((c) => c.name === beforeName);
+    if (idx === -1) return `\x1b[31mls: --before ${beforeName}: No such child element\x1b[0m`;
+    children = children.slice(0, idx);
   }
 
   // Type filter
@@ -1638,7 +1744,7 @@ async function handleCat(args: string[]): Promise<string> {
 
   const targetName = args[0];
   const currentId = getCurrentNodeId();
-  const match = findChildByName(currentId, targetName, nodeMap);
+  const match = resolveByPath(currentId, targetName, nodeMap);
 
   if (!match) {
     return `\x1b[31mcat: ${targetName}: No such file or directory\x1b[0m`;
@@ -1762,7 +1868,7 @@ async function handleText(args: string[]): Promise<string> {
   if (pa.positional.length > 0) {
     const name = pa.positional[0];
     const currentId = getCurrentNodeId();
-    const match = findChildByName(currentId, name, nodeMap);
+    const match = resolveByPath(currentId, name, nodeMap);
     if (!match) {
       return `\x1b[31mtext: ${name}: No such file or directory\x1b[0m`;
     }
@@ -1817,7 +1923,7 @@ async function handleClick(args: string[]): Promise<string> {
 
   const targetName = args[0];
   const currentId = getCurrentNodeId();
-  const match = findChildByName(currentId, targetName, nodeMap);
+  const match = resolveByPath(currentId, targetName, nodeMap);
 
   if (!match) {
     return `\x1b[31mclick: ${targetName}: No such element\x1b[0m`;
@@ -1854,7 +1960,7 @@ async function handleFocus(args: string[]): Promise<string> {
 
   const targetName = args[0];
   const currentId = getCurrentNodeId();
-  const match = findChildByName(currentId, targetName, nodeMap);
+  const match = resolveByPath(currentId, targetName, nodeMap);
 
   if (!match) {
     return `\x1b[31mfocus: ${targetName}: No such element\x1b[0m`;
@@ -1900,7 +2006,7 @@ async function handleSubmit(args: string[]): Promise<string> {
   const currentId = getCurrentNodeId();
 
   // 1. Find and focus the input
-  const input = findChildByName(currentId, inputName, nodeMap);
+  const input = resolveByPath(currentId, inputName, nodeMap);
   if (!input) {
     return `\x1b[31msubmit: ${inputName}: No such element\x1b[0m`;
   }
@@ -1921,7 +2027,7 @@ async function handleSubmit(args: string[]): Promise<string> {
 
   // 4. Submit: click button or press Enter
   if (submitBtnName) {
-    const btn = findChildByName(currentId, submitBtnName, nodeMap);
+    const btn = resolveByPath(currentId, submitBtnName, nodeMap);
     if (btn && btn.backendDOMNodeId) {
       try {
         await cdp.clickByBackendNodeId(btn.backendDOMNodeId);
@@ -1963,7 +2069,7 @@ async function handleExtractLinks(args: string[]): Promise<string> {
   if (pa.positional.length > 0) {
     const name = pa.positional[0];
     const currentId = getCurrentNodeId();
-    const match = findChildByName(currentId, name, nodeMap);
+    const match = resolveByPath(currentId, name, nodeMap);
     if (!match) return `\x1b[31mextract_links: ${name}: No such element\x1b[0m`;
     targetId = match.axNodeId;
   } else {
@@ -2019,7 +2125,7 @@ async function handleExtractTable(args: string[]): Promise<string> {
 
   const tableName = pa.positional[0];
   const currentId = getCurrentNodeId();
-  const tableNode = findChildByName(currentId, tableName, nodeMap);
+  const tableNode = resolveByPath(currentId, tableName, nodeMap);
   if (!tableNode) return `\x1b[31mextract_table: ${tableName}: No such element\x1b[0m`;
 
   // Walk table structure: table -> rowgroup/row -> row -> cell
@@ -2336,7 +2442,7 @@ async function handleRead(args: string[]): Promise<string> {
   if (pa.positional.length > 0) {
     const name = pa.positional[0];
     const currentId = getCurrentNodeId();
-    const match = findChildByName(currentId, name, nodeMap);
+    const match = resolveByPath(currentId, name, nodeMap);
     if (!match) {
       return `\x1b[31mread: ${name}: No such file or directory\x1b[0m`;
     }

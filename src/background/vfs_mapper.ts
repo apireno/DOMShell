@@ -240,6 +240,30 @@ export function findChildByName(
 }
 
 /**
+ * Resolve a name or multi-segment path (e.g. "main/article/paragraph")
+ * from a starting parent node. Returns the final VFSNode, or null if
+ * any segment along the path doesn't exist.
+ */
+export function resolveByPath(
+  startId: string,
+  nameOrPath: string,
+  nodeMap: Map<string, AXNode>
+): VFSNode | null {
+  const segments = nameOrPath.split("/").filter(Boolean);
+  if (segments.length === 0) return null;
+  if (segments.length === 1) return findChildByName(startId, segments[0], nodeMap);
+
+  let currentParentId = startId;
+  let resolved: VFSNode | null = null;
+  for (const segment of segments) {
+    resolved = findChildByName(currentParentId, segment, nodeMap);
+    if (!resolved) return null;
+    currentParentId = resolved.axNodeId;
+  }
+  return resolved;
+}
+
+/**
  * Update the cached node map. Returns the new map.
  */
 export function updateNodeMap(axNodes: AXNode[]): Map<string, AXNode> {

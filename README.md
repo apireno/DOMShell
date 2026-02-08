@@ -337,9 +337,11 @@ dom@shell:~$find --type link --meta
 [x] /main/Read_more (link)  href=https://example.com/article <a>
 ```
 
-### Command Chaining with Grep
+### Command Chaining (Bash-Style Composition)
 
-`grep` is the linchpin for multi-step workflows. It discovers where content lives, giving you section names and paths that feed into `cd`, `text`, `find`, and extraction commands. The pattern is: **grep (locate) → cd (scope) → extract (read)**.
+DOMShell works like a filesystem — use the same mental model as searching files on disk. `grep` discovers where content lives (like `grep -r` in bash), `cd` scopes your context, and `text`/`cat`/`find` reads content (like `cat`/`head`/`less`). The pipe operator (`|`) filters output, just like bash.
+
+**The pattern is: grep (locate) → cd (scope) → extract (read).**
 
 ```bash
 # Workflow 1: Find and read an article section
@@ -380,6 +382,61 @@ dom@shell:~$ grep -r --content "sign up"
 [x] get_started_btn (button)  →  ./main/hero/get_started_btn
 # The button's NAME is "get_started_btn" but its displayed text says "Sign Up Free"
 dom@shell:~$ click get_started_btn
+```
+
+### Pipe Operator
+
+The pipe operator (`|`) lets you filter command output, just like bash:
+
+```bash
+# Filter find results to only GitHub links
+dom@shell:~$ find --type link --meta | grep github
+[x] /main/repo_link (link)  href=https://github.com/example <a>
+
+# Filter ls output to elements mentioning "login"
+dom@shell:~$ ls --text | grep login
+[x] login_btn  "Log in to your account"
+
+# Limit results with head
+dom@shell:~$ find --type heading | head -n 3
+[−] /main/intro_heading (heading)
+[−] /main/features_heading (heading)
+[−] /main/pricing_heading (heading)
+
+# Chain multiple pipes
+dom@shell:~$ find --type link --meta | grep docs | head -n 5
+```
+
+### Path Resolution
+
+All commands accept relative paths, eliminating the need to `cd` first:
+
+```bash
+# Read text from a nested element directly
+dom@shell:~$ text main/article/paragraph_2971
+
+# Click a button inside a form without cd'ing
+dom@shell:~$ click main/form/submit_btn
+
+# Inspect a link in the nav
+dom@shell:~$ cat navigation/home_link
+```
+
+### Sibling Navigation
+
+Use `--after` and `--before` flags on `ls` to find content relative to a landmark:
+
+```bash
+# Show the 3 elements after a heading
+dom@shell:~$ ls --after See_also_heading -n 3 --text
+[d] related_topics_list  "Machine Learning, Deep Learning, Neural..."
+[−] paragraph_4512       "For more information on these topics..."
+[x] Read_more_link       "Read more on Wikipedia"
+
+# Find links after a specific section heading
+dom@shell:~$ ls --after References_heading --type link --meta
+[x] source_1_link (link)  href=https://arxiv.org/... <a>
+[x] source_2_link (link)  href=https://doi.org/... <a>
 ```
 
 The key insight: `grep` output feeds `cd`, and `cd` scopes everything else. When you don't know where content lives on a page, always grep first, then scope, then extract.
@@ -527,7 +584,7 @@ Options:
 
 | Command | Description |
 |---|---|
-| `ls [options]` | List children (`-l`, `--meta`, `--text`, `-r`, `-n N`, `--offset N`, `--type ROLE`, `--count`) |
+| `ls [options]` | List children (`-l`, `--meta`, `--text`, `-r`, `-n N`, `--offset N`, `--type ROLE`, `--count`, `--after NAME`, `--before NAME`) |
 | `cd <path>` | Navigate (`..`, `~` or `/` for browser root, `%here%` for focused tab, `main/form` for multi-level) |
 | `pwd` | Print current path (DOM path or browser path) |
 | `tree [depth]` | Tree view of current node (default depth: 2) |
@@ -932,7 +989,7 @@ dom@shell:$ disconnect
 - [ ] **`back` / `forward`** — browser-style history navigation within the current tab
 - [ ] **`close`** — close the current tab (`close` or `close <tab-id>`)
 - [ ] **`screenshot`** — capture a screenshot of the current tab (useful for visual verification alongside AX tree inspection)
-- [ ] **`pipe` / `|`** — pipe output between commands (e.g. `find --type link | grep login`)
+- [x] **`pipe` / `|`** — pipe output between commands (e.g. `find --type link | grep login`)
 - [ ] **`select <name>`** — select an option from a `<select>` dropdown by value or visible text
 - [ ] **`scroll`** — scroll the page or a specific element (`scroll down`, `scroll up`, `scroll <name>`)
 - [ ] **`wait`** — wait for a specific element to appear (e.g. `wait submit_btn` blocks until it exists in the tree)

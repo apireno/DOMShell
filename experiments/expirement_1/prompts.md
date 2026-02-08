@@ -2,6 +2,15 @@
 
 Each prompt has two versions: one for DOMShell (Method A) and one for Claude in Chrome (Method B). Copy-paste exactly — the guardrail preamble is intentional.
 
+## How to Use
+
+1. Open a **new Cowork session** in Claude Desktop (clean context — no carryover)
+2. Copy the exact prompt block for the trial you're running
+3. Paste it into the Cowork chat and let the agent work — **do not intervene**
+4. When the agent produces its final answer, count tool calls and score against `results/ground_truth.md`
+
+For the **shortcut method** (all 6 trials of one method in a single session), paste each prompt sequentially. Warm trials benefit from conversation context — note this in your methodology.
+
 ---
 
 ## Shared Preamble (baked into every prompt)
@@ -194,4 +203,4 @@ OUTPUT FORMAT:
 | Task 2 | Search + navigate + extract | 20 calls |
 | Task 3 | Multi-page navigation + table extraction | 25 calls |
 
-Wall clock hard cap for all tasks: **90 seconds**.
+Wall clock time is informative but not enforced in Cowork (interactive sessions). Tool call count is the primary efficiency metric.

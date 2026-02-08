@@ -1005,6 +1005,10 @@ dom@shell:$ disconnect
 ### Agent Ergonomics
 
 - [x] **`--text` flag** — show visible text previews inline with `ls` and `find` using `.innerText` (rendered text only, respects CSS visibility); configurable length via `--textlen N`; `cat` also shows VisibleText separately from textContent
+- [x] **`--meta` flag** — show DOM properties (href, src, id, tag) inline with `ls`, `find`, and `read` output — essential for extracting URLs without separate `cat` calls
+- [x] **`--content` matching** — search by visible text content with `grep --content` and `find --content` (or `find --text "pattern"`) — finds elements by what they display, not just their AX name
+- [x] **Path resolution** — all commands accept relative paths (e.g. `text main/article/paragraph`, `click form/submit_btn`) — eliminates unnecessary `cd` round-trips
+- [x] **Sibling navigation** — `--after`/`--before` flags on `ls` to slice children relative to a landmark element (e.g. `ls --after heading --type link --meta`)
 - [ ] **`bookmark` / `alias`** — save named paths for quick navigation (e.g. `bookmark inbox ~/tabs/gmail/main/inbox_list`)
 - [ ] **Multi-tab operations** — run a command across multiple tabs (e.g. `each tab text main` to extract text from every open tab)
 - [ ] **Structured output mode** — `--json` flag on commands for machine-parseable output (e.g. `ls --json`, `cat --json`)

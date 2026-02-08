@@ -993,6 +993,8 @@ dom@shell:$ disconnect
 - [ ] **`select <name>`** — select an option from a `<select>` dropdown by value or visible text
 - [ ] **`scroll`** — scroll the page or a specific element (`scroll down`, `scroll up`, `scroll <name>`)
 - [ ] **`wait`** — wait for a specific element to appear (e.g. `wait submit_btn` blocks until it exists in the tree)
+- [ ] **`for` loop** — iterate over elements (e.g. `for item in $(find --type link); do cat $item; done`) — basic shell-style looping for batch operations
+- [ ] **`.sh` scripts** — save and execute multi-command shell scripts (e.g. `run scrape.sh`) for repeatable workflows
 
 ### JavaScript Layer
 
@@ -1015,6 +1017,7 @@ dom@shell:$ disconnect
 - [ ] **Firefox extension** — port to Firefox using WebExtensions API + remote debugging protocol
 - [ ] **Playwright/Puppeteer backend** — alternative to Chrome extension for headless agent workflows
 - [ ] **REST API mode** — expose DOMShell commands over HTTP for non-MCP integrations
+- [ ] **WASM build** — compile DOMShell to WebAssembly so it can be embedded directly on a website for interactive demos without requiring a Chrome extension install
 
 ## How This Project Was Built
 

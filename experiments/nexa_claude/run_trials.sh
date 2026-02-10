@@ -3,7 +3,7 @@
 # Each trial output saved to raw_output/trial_NN.txt
 
 AGENT="/Users/apireno/repos/DOMShell/integrations/nexa/agent.py"
-OUT="/Users/apireno/repos/DOMShell/experiments/nexa/results/raw_output"
+OUT="/Users/apireno/repos/DOMShell/experiments/nexa_claude/results/raw_output"
 ENDPOINT="http://127.0.0.1:8080/v1"
 TOKEN="52642f3f8e93d6be3e59aa90aa3526d06392a2cb5493aaf4"
 

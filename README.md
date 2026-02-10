@@ -1025,7 +1025,8 @@ dom@shell:$ disconnect
 
 ### Experiments
 
-- [ ] **Nexa: DOMShell vs Vision (browser-use)** — same model, same tasks: compare DOMShell's text/AX-tree approach against Nexa's [Playwright+screenshot Web-Agent](https://github.com/NexaAI/nexa-sdk/tree/main/cookbook/PC/Web-Agent-Qwen3VL). Validates the interface design, not the model. See `experiments/nexa/` for the existing DOMShell-side results.
+- [ ] **Nexa: DOMShell vs Raw HTML** — same model (Qwen3-4B), same tasks: compare DOMShell's text/AX-tree interface against raw HTML scraping. Tests on both nexa serve and Ollama backends. Validates the interface design, not the model. See `experiments/nexa_interface/`.
+- [x] **Nexa vs Claude (model size)** — compared Qwen3-1.7B/4B against Claude Opus on the same DOMShell tasks. Result: 0/12 — capability gap is binary, not gradual. See `experiments/nexa_claude/`.
 
 ## Integrations
 

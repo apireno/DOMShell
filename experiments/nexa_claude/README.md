@@ -62,13 +62,13 @@ nexa serve
 cd mcp-server && npx tsx index.ts --no-confirm --allow-all
 
 # 3. Run all trials
-bash experiments/nexa/run_trials.sh
+bash experiments/nexa_claude/run_trials.sh
 ```
 
 ## File Structure
 
 ```
-experiments/nexa/
+experiments/nexa_claude/
 ├── README.md               ← You are here
 ├── nexa_prompts.md         ← Task strings and trial matrix
 ├── run_trials.sh           ← Automated runner script

@@ -1023,6 +1023,22 @@ dom@shell:$ disconnect
 - [ ] **REST API mode** — expose DOMShell commands over HTTP for non-MCP integrations
 - [ ] **WASM build** — compile DOMShell to WebAssembly so it can be embedded directly on a website for interactive demos without requiring a Chrome extension install
 
+### Experiments
+
+- [ ] **Nexa: DOMShell vs Vision (browser-use)** — same model, same tasks: compare DOMShell's text/AX-tree approach against Nexa's [Playwright+screenshot Web-Agent](https://github.com/NexaAI/nexa-sdk/tree/main/cookbook/PC/Web-Agent-Qwen3VL). Validates the interface design, not the model. See `experiments/nexa/` for the existing DOMShell-side results.
+
+## Integrations
+
+### Nexa AI (Local LLM)
+
+Run DOMShell with local models via [nexa-sdk](https://github.com/NexaAI/nexa-sdk) — fully on-device browser automation with no cloud API needed. Uses the same MCP protocol as Claude Desktop but powered by local inference (Granite-4-Micro, Qwen3, etc.).
+
+```bash
+python integrations/nexa/agent.py --task "Open wikipedia.org/wiki/AI and extract the first paragraph" --verbose
+```
+
+See [integrations/nexa/](integrations/nexa/) for setup and usage.
+
 ## How This Project Was Built
 
 The technical specification for DOMShell was authored by **Google Gemini**, designed as a comprehensive prompt that could be handed directly to a coding agent to scaffold and build the entire project from scratch. The full original specification is preserved in [`intitial_project_prompt.md`](intitial_project_prompt.md).

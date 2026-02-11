@@ -62,13 +62,13 @@ ollama pull qwen3:4b
 cd mcp-server && npx tsx index.ts --no-confirm --allow-all
 
 # 4. Run all trials
-bash experiments/nexa_interface/run_trials.sh
+bash experiments/nexa_ollama/run_trials.sh
 ```
 
 ## File Structure
 
 ```
-experiments/nexa_interface/
+experiments/nexa_ollama/
 ├── README.md               <- You are here
 ├── nexa_prompts.md         <- Task strings and trial matrix
 ├── run_trials.sh           <- Automated runner script

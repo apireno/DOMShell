@@ -69,7 +69,7 @@ Go to https://en.wikipedia.org/wiki/Large_language_model. Find the table of larg
 
 ---
 
-## Tool Call Caps (matching experiment_1)
+## Tool Call Caps (matching claude_domshell_vs_cic)
 
 | Task | Complexity | Max turns |
 |------|-----------|-----------|

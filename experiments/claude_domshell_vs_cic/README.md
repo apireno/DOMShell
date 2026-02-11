@@ -127,7 +127,7 @@ For practical convenience, all 6 DOMShell trials can be run in a single Cowork s
 ## File Structure
 
 ```
-expirement_1/
+claude_domshell_vs_cic/
 ├── README.md               ← You are here
 ├── prompts.md              ← Copy-paste prompts for each trial
 └── results/

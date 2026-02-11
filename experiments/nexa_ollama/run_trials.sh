@@ -1,10 +1,10 @@
 #!/bin/bash
-# Run all 12 nexa_interface experiment trials sequentially
+# Run all 12 nexa_ollama experiment trials sequentially
 # Matrix: [nexa, ollama] x [domshell, html] x 3 tasks
 
 DOMSHELL_AGENT="/Users/apireno/repos/DOMShell/integrations/nexa/agent.py"
-HTML_AGENT="/Users/apireno/repos/DOMShell/experiments/nexa_interface/raw_html_agent.py"
-OUT="/Users/apireno/repos/DOMShell/experiments/nexa_interface/results/raw_output"
+HTML_AGENT="/Users/apireno/repos/DOMShell/experiments/nexa_ollama/raw_html_agent.py"
+OUT="/Users/apireno/repos/DOMShell/experiments/nexa_ollama/results/raw_output"
 
 NEXA_ENDPOINT="http://127.0.0.1:18181/v1"
 OLLAMA_ENDPOINT="http://127.0.0.1:11434/v1"

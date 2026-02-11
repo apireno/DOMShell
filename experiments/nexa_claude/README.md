@@ -16,7 +16,7 @@ Small local LLMs (1.7B–4B parameters) running via nexa-sdk can perform the sam
 
 ## Tasks
 
-Same three Wikipedia tasks as Experiment 1:
+Same three Wikipedia tasks as claude_domshell_vs_cic:
 
 1. **Content Extraction** — Extract first paragraph + 10 links from the AI article
 2. **Search + Navigate** — Search Wikipedia for "machine learning", extract paragraph + See Also
@@ -73,7 +73,7 @@ experiments/nexa_claude/
 ├── nexa_prompts.md         ← Task strings and trial matrix
 ├── run_trials.sh           ← Automated runner script
 └── results/
-    ├── ground_truth.md     ← Expected answers (same as experiment_1)
+    ├── ground_truth.md     ← Expected answers (same as claude_domshell_vs_cic)
     ├── results.md          ← Full trial data
     ├── analysis.md         ← Analysis and recommendations
     └── raw_output/         ← Raw agent.py output per trial

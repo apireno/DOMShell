@@ -1,7 +1,7 @@
 # DOMShell
 
 ```
-| |
+           | |
         ___|_|___
        |___|_|___|
        |   | |   |
@@ -1025,7 +1025,7 @@ dom@shell:$ disconnect
 
 ### Experiments
 
-- [ ] **Nexa: DOMShell vs Raw HTML** — same model (Qwen3-4B), same tasks: compare DOMShell's text/AX-tree interface against raw HTML scraping. Tests on both nexa serve and Ollama backends. Validates the interface design, not the model. See `experiments/nexa_interface/`.
+- [ ] **Nexa: DOMShell vs Raw HTML** — same model (Qwen3-4B), same tasks: compare DOMShell's text/AX-tree interface against raw HTML scraping. Tests on both nexa serve and Ollama backends. Validates the interface design, not the model. See `experiments/nexa_ollama/`.
 - [x] **Nexa vs Claude (model size)** — compared Qwen3-1.7B/4B against Claude Opus on the same DOMShell tasks. Result: 0/12 — capability gap is binary, not gradual. See `experiments/nexa_claude/`.
 
 ## Integrations

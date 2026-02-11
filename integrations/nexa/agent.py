@@ -413,12 +413,16 @@ def generate_response(
         "messages": messages,
         "max_tokens": 2048,
         "temperature": 0.1,
+        "enable_thinking": False,  # Disable Qwen3 <think> blocks on both backends
     }).encode()
 
     req = urllib.request.Request(
         f"{endpoint}/chat/completions",
         data=payload,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "Nexa-KeepCache": "true",  # Preserve multi-turn context on nexa serve
+        },
         method="POST",
     )
 

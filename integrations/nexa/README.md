@@ -146,7 +146,33 @@ The agent auto-discovers models from `nexa serve`. Use whatever model you have p
 | `NexaAI/Granite-4-Micro-GGUF` | ~2GB | Cross-platform | Good | Optimized for tool use |
 | `NexaAI/Qwen3-0.6B-GGUF` | ~400MB | Cross-platform | Basic | Use with `--mode compact` for minimal footprint |
 
-**Tip:** Qwen3 models output `<think>...</think>` reasoning blocks before their response. The agent automatically strips these during function call extraction.
+**Tip:** The agent sends `enable_thinking: false` in API requests to disable Qwen3's `<think>` blocks. If you use a backend that doesn't support this parameter, the agent will still strip think blocks during function call extraction.
+
+## Known Limitations
+
+Issues discovered during the [nexa_ollama experiment](../../experiments/nexa_ollama/):
+
+| Issue | Impact | Workaround |
+|-------|--------|------------|
+| **MLX 4-bit quantization quality** ([#688](https://github.com/NexaAI/nexa-sdk/issues/688)) | MLX 4-bit hallucinates more than GGUF K-quants for the same model. Uniform bit allocation loses precision on important weights. | Use GGUF models when quality matters more than speed, or use Ollama as backend. |
+| **No constrained generation** ([#459](https://github.com/NexaAI/nexa-sdk/issues/459)) | Small models can hallucinate arbitrary tokens in tool call JSON with no guardrails. Open since Oct 2024. | Use larger models (8B+) or specialized function-calling models like Octopus-V2. |
+| **Multi-turn context dropped** ([#634](https://github.com/NexaAI/nexa-sdk/issues/634)) | nexa serve may ignore system prompts and earlier messages without `Nexa-KeepCache: true` header. | The agent now sends this header automatically. |
+| **Safety over-refusal** | Qwen3's RLHF safety tuning can trigger on benign content when quantized aggressively (e.g., refusing to return Wikipedia text). | Use larger models or less aggressive quantization. |
+
+### Using Ollama as an alternative backend
+
+The agent works with any OpenAI-compatible API. To use Ollama instead of nexa serve:
+
+```bash
+# Start Ollama and pull a model
+ollama serve
+ollama pull qwen3:4b
+
+# Run agent with Ollama endpoint
+python agent.py --task "..." --nexa-endpoint http://127.0.0.1:11434/v1 --model qwen3 --allow-write --verbose
+```
+
+In our experiments, Ollama + Qwen3-4B outperformed Nexa serve + Qwen3-4B significantly (1.50 vs 0.67 avg correctness), likely due to better GGUF K-quant quantization and cleaner thinking/content separation.
 
 ## How It Works
 

@@ -1,56 +1,48 @@
-# Experiment: DOMShell + Nexa (Local LLM)
+# Experiment: DOMShell + Nexa (Model Size Comparison)
 
 ## Hypothesis
 
-Small local LLMs (1.7B–4B parameters) running via nexa-sdk can perform the same browser automation tasks as Claude Opus using DOMShell's MCP tools.
+Small local LLMs can perform progressively complex browser extraction tasks using DOMShell's MCP tools, with 4B models succeeding at harder tasks than 1.7B models.
 
 ## What We're Testing
 
-| | **Nexa Agent** | **Experiment 1 Baseline** |
+Model size (1.7B vs 4B) on nexa serve, using DOMShell in compact mode.
+
+| | **Qwen3-1.7B** | **Qwen3-4B** |
 |---|---|---|
-| **Runner** | `agent.py` + nexa serve | Claude Desktop — Cowork mode |
-| **LLM** | Qwen3-1.7B / Qwen3-4B (local) | Claude Opus 4.6 (cloud) |
-| **Parameters** | 1.7B / 4B | ~175B+ |
-| **Tools** | DOMShell MCP (full + compact mode) | DOMShell MCP / Claude in Chrome |
-| **Inference** | On-device (Apple Silicon MLX) | Cloud API |
+| **Runner** | `agent.py` + nexa serve | `agent.py` + nexa serve |
+| **Parameters** | 1.7B (MLX 4-bit) | 4B (MLX 4-bit) |
+| **Mode** | Compact | Compact |
 
-## Tasks
+## Tasks (Progressive Difficulty)
 
-Same three Wikipedia tasks as claude_domshell_vs_cic:
+All tasks use the same Wikipedia article: https://en.wikipedia.org/wiki/Artificial_intelligence
 
-1. **Content Extraction** — Extract first paragraph + 10 links from the AI article
-2. **Search + Navigate** — Search Wikipedia for "machine learning", extract paragraph + See Also
-3. **Multi-step** — Find LLM table, extract 5 models, follow first model's link
+| Task | Goal | Expected Calls | Max Turns |
+|------|------|----------------|-----------|
+| **T1: Title** | Return the page title | 1 | 5 |
+| **T2: H1 heading** | Extract the main heading text | 1-2 | 5 |
+| **T3: First paragraph** | Extract the first paragraph verbatim | 2-4 | 8 |
+| **T4: Count headings** | Count how many h2 sections exist | 2-3 | 8 |
+| **T5: Extract 5 links** | Return first 5 article links with text + URL | 3-5 | 10 |
 
 ## Trial Matrix
 
-12 trials: 3 tasks × 2 models × 2 modes
+10 trials: 5 tasks x 2 models (compact mode only)
 
-| Trial | Task | Model | Mode | Max Turns |
-|-------|------|-------|------|-----------|
-| 1–4 | T1 | 1.7B / 4B | Full / Compact | 15 |
-| 5–8 | T2 | 1.7B / 4B | Full / Compact | 20 |
-| 9–12 | T3 | 1.7B / 4B | Full / Compact | 25 |
+| | Qwen3-1.7B | Qwen3-4B |
+|---|---|---|
+| **T1: Title** | Trial 1 | Trial 2 |
+| **T2: H1 heading** | Trial 3 | Trial 4 |
+| **T3: First paragraph** | Trial 5 | Trial 6 |
+| **T4: Count headings** | Trial 7 | Trial 8 |
+| **T5: Extract 5 links** | Trial 9 | Trial 10 |
 
-## Results
+## Metrics
 
-**0 out of 12 trials completed their assigned task.**
-
-| Task | 1.7B Full | 4B Full | 1.7B Compact | 4B Compact |
-|------|-----------|---------|--------------|------------|
-| T1 | 2 calls, gave up | 3 calls, crash | 15 calls, ls loop | 6 calls, partial |
-| T2 | 1 call, stopped | 3 calls, errors | 3 calls, wrong page | 0 calls, nothing |
-| T3 | 2 calls, stopped | 1 call, stopped | 1 call, hallucinated | 25 calls, loop |
-
-See [results/results.md](results/results.md) for full trial details and [results/analysis.md](results/analysis.md) for analysis.
-
-## Key Finding
-
-The capability gap between 1.7B–4B and 175B+ models is **binary, not gradual** for multi-step tool use. Small models can open pages (step 1) but cannot:
-- Discover DOM element names (e.g., `main_940/` vs `main`)
-- Adapt to errors and try alternative approaches
-- Maintain task context across multiple tool calls
-- Resist hallucinating answers from training data
+- **Correctness** (0-3 scale: 0=wrong, 1=partial, 2=mostly correct, 3=correct)
+- **Tool calls** (fewer = more efficient)
+- **Hallucination** (binary: did the model fabricate content?)
 
 ## How to Reproduce
 
@@ -69,15 +61,12 @@ bash experiments/nexa_claude/run_trials.sh
 
 ```
 experiments/nexa_claude/
-├── README.md               ← You are here
-├── nexa_prompts.md         ← Task strings and trial matrix
-├── run_trials.sh           ← Automated runner script
+├── README.md               <- You are here
+├── nexa_prompts.md         <- Task strings and trial matrix
+├── run_trials.sh           <- Automated runner script
 └── results/
-    ├── ground_truth.md     ← Expected answers (same as claude_domshell_vs_cic)
-    ├── results.md          ← Full trial data
-    ├── analysis.md         ← Analysis and recommendations
-    └── raw_output/         ← Raw agent.py output per trial
-        ├── trial_01_t1_1.7b_full.txt
-        ├── trial_02_t1_4b_full.txt
-        └── ...
+    ├── ground_truth.md     <- Expected answers
+    ├── results.md          <- Full trial data (populated after running)
+    ├── analysis.md         <- Analysis (populated after running)
+    └── raw_output/         <- Raw agent.py output per trial
 ```

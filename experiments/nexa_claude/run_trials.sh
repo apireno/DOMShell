@@ -1,113 +1,100 @@
 #!/bin/bash
-# Run all 12 Nexa experiment trials sequentially
-# Each trial output saved to raw_output/trial_NN.txt
+# Run all 10 nexa_claude experiment trials sequentially
+# Matrix: 5 progressive tasks x 2 models (1.7B, 4B), compact mode only
 
 AGENT="/Users/apireno/repos/DOMShell/integrations/nexa/agent.py"
 OUT="/Users/apireno/repos/DOMShell/experiments/nexa_claude/results/raw_output"
-ENDPOINT="http://127.0.0.1:8080/v1"
+ENDPOINT="http://127.0.0.1:18181/v1"
 TOKEN="52642f3f8e93d6be3e59aa90aa3526d06392a2cb5493aaf4"
 
-TASK1='Go to https://en.wikipedia.org/wiki/Artificial_intelligence. Extract the first paragraph of the article body. Then list the first 10 hyperlinks in the article body with their display text and full URLs.'
-TASK2='Go to https://en.wikipedia.org. Search for "machine learning" using the search box. On the results page, click the first result. Then extract the first paragraph of the article and list all items in the See also section.'
-TASK3='Go to https://en.wikipedia.org/wiki/Large_language_model. Find the table of large language models. Extract the names and organizations of the first 5 models listed. Then follow the Wikipedia link for the first model in the list and extract the first paragraph of that models page.'
+T1='Open https://en.wikipedia.org/wiki/Artificial_intelligence and tell me the page title.'
+T2='Open https://en.wikipedia.org/wiki/Artificial_intelligence and extract the text of the main heading (h1) on the page.'
+T3='Open https://en.wikipedia.org/wiki/Artificial_intelligence and extract the first paragraph of the article. Return the exact text, do not summarize.'
+T4='Open https://en.wikipedia.org/wiki/Artificial_intelligence and count how many top-level section headings (h2) are on the page. Return just the number.'
+T5='Open https://en.wikipedia.org/wiki/Artificial_intelligence and extract the first 5 hyperlinks from the article body. For each link, return the display text and URL.'
 
-echo "=== Starting Nexa Experiment Trials ==="
+echo "=== Nexa Claude Experiment (Progressive Difficulty) ==="
+echo "Matrix: 5 tasks x 2 models (compact mode only) = 10 trials"
 echo "Start time: $(date)"
 echo ""
 
-# Trial 1: T1 Qwen3-1.7B full
-echo "--- Trial 1: T1 Qwen3-1.7B full ---"
-python3 "$AGENT" --task "$TASK1" --allow-write --verbose --max-turns 15 \
-  --nexa-endpoint "$ENDPOINT" --token "$TOKEN" --model qwen3-1.7b --mode full \
-  2>&1 | tee "$OUT/trial_01_t1_1.7b_full.txt"
-echo ""
-sleep 2
+# --- T1: Page Title ---
 
-# Trial 2: T1 Qwen3-4B full
-echo "--- Trial 2: T1 Qwen3-4B full ---"
-python3 "$AGENT" --task "$TASK1" --allow-write --verbose --max-turns 15 \
-  --nexa-endpoint "$ENDPOINT" --token "$TOKEN" --model qwen3-4b --mode full \
-  2>&1 | tee "$OUT/trial_02_t1_4b_full.txt"
-echo ""
-sleep 2
-
-# Trial 3: T1 Qwen3-1.7B compact
-echo "--- Trial 3: T1 Qwen3-1.7B compact ---"
-python3 "$AGENT" --task "$TASK1" --allow-write --verbose --max-turns 15 \
+echo "--- Trial 1: T1 Qwen3-1.7B ---"
+python3 "$AGENT" --task "$T1" --allow-write --verbose --max-turns 5 \
   --nexa-endpoint "$ENDPOINT" --token "$TOKEN" --model qwen3-1.7b --mode compact \
-  2>&1 | tee "$OUT/trial_03_t1_1.7b_compact.txt"
+  2>&1 | tee "$OUT/trial_01_t1_1.7b.txt"
 echo ""
 sleep 2
 
-# Trial 4: T1 Qwen3-4B compact
-echo "--- Trial 4: T1 Qwen3-4B compact ---"
-python3 "$AGENT" --task "$TASK1" --allow-write --verbose --max-turns 15 \
+echo "--- Trial 2: T1 Qwen3-4B ---"
+python3 "$AGENT" --task "$T1" --allow-write --verbose --max-turns 5 \
   --nexa-endpoint "$ENDPOINT" --token "$TOKEN" --model qwen3-4b --mode compact \
-  2>&1 | tee "$OUT/trial_04_t1_4b_compact.txt"
+  2>&1 | tee "$OUT/trial_02_t1_4b.txt"
 echo ""
 sleep 2
 
-# Trial 5: T2 Qwen3-1.7B full
-echo "--- Trial 5: T2 Qwen3-1.7B full ---"
-python3 "$AGENT" --task "$TASK2" --allow-write --verbose --max-turns 20 \
-  --nexa-endpoint "$ENDPOINT" --token "$TOKEN" --model qwen3-1.7b --mode full \
-  2>&1 | tee "$OUT/trial_05_t2_1.7b_full.txt"
-echo ""
-sleep 2
+# --- T2: H1 Heading ---
 
-# Trial 6: T2 Qwen3-4B full
-echo "--- Trial 6: T2 Qwen3-4B full ---"
-python3 "$AGENT" --task "$TASK2" --allow-write --verbose --max-turns 20 \
-  --nexa-endpoint "$ENDPOINT" --token "$TOKEN" --model qwen3-4b --mode full \
-  2>&1 | tee "$OUT/trial_06_t2_4b_full.txt"
-echo ""
-sleep 2
-
-# Trial 7: T2 Qwen3-1.7B compact
-echo "--- Trial 7: T2 Qwen3-1.7B compact ---"
-python3 "$AGENT" --task "$TASK2" --allow-write --verbose --max-turns 20 \
+echo "--- Trial 3: T2 Qwen3-1.7B ---"
+python3 "$AGENT" --task "$T2" --allow-write --verbose --max-turns 5 \
   --nexa-endpoint "$ENDPOINT" --token "$TOKEN" --model qwen3-1.7b --mode compact \
-  2>&1 | tee "$OUT/trial_07_t2_1.7b_compact.txt"
+  2>&1 | tee "$OUT/trial_03_t2_1.7b.txt"
 echo ""
 sleep 2
 
-# Trial 8: T2 Qwen3-4B compact
-echo "--- Trial 8: T2 Qwen3-4B compact ---"
-python3 "$AGENT" --task "$TASK2" --allow-write --verbose --max-turns 20 \
+echo "--- Trial 4: T2 Qwen3-4B ---"
+python3 "$AGENT" --task "$T2" --allow-write --verbose --max-turns 5 \
   --nexa-endpoint "$ENDPOINT" --token "$TOKEN" --model qwen3-4b --mode compact \
-  2>&1 | tee "$OUT/trial_08_t2_4b_compact.txt"
+  2>&1 | tee "$OUT/trial_04_t2_4b.txt"
 echo ""
 sleep 2
 
-# Trial 9: T3 Qwen3-1.7B full
-echo "--- Trial 9: T3 Qwen3-1.7B full ---"
-python3 "$AGENT" --task "$TASK3" --allow-write --verbose --max-turns 25 \
-  --nexa-endpoint "$ENDPOINT" --token "$TOKEN" --model qwen3-1.7b --mode full \
-  2>&1 | tee "$OUT/trial_09_t3_1.7b_full.txt"
-echo ""
-sleep 2
+# --- T3: First Paragraph ---
 
-# Trial 10: T3 Qwen3-4B full
-echo "--- Trial 10: T3 Qwen3-4B full ---"
-python3 "$AGENT" --task "$TASK3" --allow-write --verbose --max-turns 25 \
-  --nexa-endpoint "$ENDPOINT" --token "$TOKEN" --model qwen3-4b --mode full \
-  2>&1 | tee "$OUT/trial_10_t3_4b_full.txt"
-echo ""
-sleep 2
-
-# Trial 11: T3 Qwen3-1.7B compact
-echo "--- Trial 11: T3 Qwen3-1.7B compact ---"
-python3 "$AGENT" --task "$TASK3" --allow-write --verbose --max-turns 25 \
+echo "--- Trial 5: T3 Qwen3-1.7B ---"
+python3 "$AGENT" --task "$T3" --allow-write --verbose --max-turns 8 \
   --nexa-endpoint "$ENDPOINT" --token "$TOKEN" --model qwen3-1.7b --mode compact \
-  2>&1 | tee "$OUT/trial_11_t3_1.7b_compact.txt"
+  2>&1 | tee "$OUT/trial_05_t3_1.7b.txt"
 echo ""
 sleep 2
 
-# Trial 12: T3 Qwen3-4B compact
-echo "--- Trial 12: T3 Qwen3-4B compact ---"
-python3 "$AGENT" --task "$TASK3" --allow-write --verbose --max-turns 25 \
+echo "--- Trial 6: T3 Qwen3-4B ---"
+python3 "$AGENT" --task "$T3" --allow-write --verbose --max-turns 8 \
   --nexa-endpoint "$ENDPOINT" --token "$TOKEN" --model qwen3-4b --mode compact \
-  2>&1 | tee "$OUT/trial_12_t3_4b_compact.txt"
+  2>&1 | tee "$OUT/trial_06_t3_4b.txt"
+echo ""
+sleep 2
+
+# --- T4: Count Headings ---
+
+echo "--- Trial 7: T4 Qwen3-1.7B ---"
+python3 "$AGENT" --task "$T4" --allow-write --verbose --max-turns 8 \
+  --nexa-endpoint "$ENDPOINT" --token "$TOKEN" --model qwen3-1.7b --mode compact \
+  2>&1 | tee "$OUT/trial_07_t4_1.7b.txt"
+echo ""
+sleep 2
+
+echo "--- Trial 8: T4 Qwen3-4B ---"
+python3 "$AGENT" --task "$T4" --allow-write --verbose --max-turns 8 \
+  --nexa-endpoint "$ENDPOINT" --token "$TOKEN" --model qwen3-4b --mode compact \
+  2>&1 | tee "$OUT/trial_08_t4_4b.txt"
+echo ""
+sleep 2
+
+# --- T5: Extract 5 Links ---
+
+echo "--- Trial 9: T5 Qwen3-1.7B ---"
+python3 "$AGENT" --task "$T5" --allow-write --verbose --max-turns 10 \
+  --nexa-endpoint "$ENDPOINT" --token "$TOKEN" --model qwen3-1.7b --mode compact \
+  2>&1 | tee "$OUT/trial_09_t5_1.7b.txt"
+echo ""
+sleep 2
+
+echo "--- Trial 10: T5 Qwen3-4B ---"
+python3 "$AGENT" --task "$T5" --allow-write --verbose --max-turns 10 \
+  --nexa-endpoint "$ENDPOINT" --token "$TOKEN" --model qwen3-4b --mode compact \
+  2>&1 | tee "$OUT/trial_10_t5_4b.txt"
 echo ""
 
 echo "=== All trials complete ==="

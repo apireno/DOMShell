@@ -17,36 +17,39 @@ All 4 cells use the **same model** (Qwen3-4B) with the **same weights**. The onl
 1. **Interface** — DOMShell AX-tree vs raw HTML
 2. **Backend** — nexa serve vs Ollama (controls for inference differences)
 
-## Why This Experiment
+## Tasks (Progressive Difficulty)
 
-The [nexa_claude experiment](../nexa_claude/) compared different model sizes (1.7B/4B vs 175B+) — an unfair comparison. This experiment holds the model constant and only varies the **interface** the model uses to understand web content. This validates whether DOMShell's design actually helps.
+All tasks use the same Wikipedia article: https://en.wikipedia.org/wiki/Artificial_intelligence
 
-## Tasks
+| Task | Goal | Expected Calls | Max Turns |
+|------|------|----------------|-----------|
+| **T1: Title** | Return the page title | 1 | 5 |
+| **T2: H1 heading** | Extract the main heading text | 1-2 | 5 |
+| **T3: First paragraph** | Extract the first paragraph verbatim | 2-4 | 8 |
+| **T4: Count headings** | Count how many h2 sections exist | 2-3 | 8 |
+| **T5: Extract 5 links** | Return first 5 article links with text + URL | 3-5 | 10 |
 
-Simplified from nexa_claude to be achievable by a 4B model (1-2 tool calls after page load):
-
-1. **T1: Page title** — Open a Wikipedia article, return the page title
-2. **T2: First paragraph** — Open a Wikipedia article, extract the first paragraph
-3. **T3: List headings** — Open a Wikipedia article, list all section headings
+Tasks progress from trivial (T1) to challenging (T5) to find where DOMShell and raw HTML diverge in effectiveness.
 
 ## Trial Matrix
 
-12 trials: 3 tasks x 2 backends x 2 interfaces
+20 trials: 5 tasks x 2 backends x 2 interfaces
 
-| | Nexa + DOMShell | Nexa + HTML | Ollama + DOMShell | Ollama + HTML |
+| | Nexa+DOMShell | Nexa+HTML | Ollama+DOMShell | Ollama+HTML |
 |---|---|---|---|---|
 | **T1: Title** | Trial 1 | Trial 2 | Trial 3 | Trial 4 |
-| **T2: Paragraph** | Trial 5 | Trial 6 | Trial 7 | Trial 8 |
-| **T3: Headings** | Trial 9 | Trial 10 | Trial 11 | Trial 12 |
+| **T2: H1** | Trial 5 | Trial 6 | Trial 7 | Trial 8 |
+| **T3: Paragraph** | Trial 9 | Trial 10 | Trial 11 | Trial 12 |
+| **T4: Headings** | Trial 13 | Trial 14 | Trial 15 | Trial 16 |
+| **T5: Links** | Trial 17 | Trial 18 | Trial 19 | Trial 20 |
 
-All trials: Qwen3-4B, max 10 turns, compact mode for DOMShell.
+All trials: Qwen3-4B, compact mode for DOMShell.
 
 ## Metrics
 
-- **Task completion** (binary: correct answer returned?)
-- **Tool calls** (fewer = more efficient)
 - **Correctness** (0-3 scale: 0=wrong, 1=partial, 2=mostly correct, 3=correct)
-- **Hallucination** (did the model fabricate content?)
+- **Tool calls** (fewer = more efficient)
+- **Hallucination** (binary: did the model fabricate content?)
 
 ## How to Reproduce
 

@@ -432,7 +432,13 @@ def generate_response(
     if not choices:
         return "(empty response from model)"
 
-    content = choices[0].get("message", {}).get("content", "")
+    msg = choices[0].get("message", {})
+    content = msg.get("content", "")
+    # Ollama puts Qwen3 thinking in a separate "reasoning" field and may
+    # return empty content.  Fall back to reasoning so the agent loop can
+    # still extract tool calls.
+    if not content and msg.get("reasoning"):
+        content = msg["reasoning"]
     return content.strip()
 
 

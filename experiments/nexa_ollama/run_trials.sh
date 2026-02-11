@@ -8,7 +8,7 @@ OUT="/Users/apireno/repos/DOMShell/experiments/nexa_ollama/results/raw_output"
 
 NEXA_ENDPOINT="http://127.0.0.1:18181/v1"
 OLLAMA_ENDPOINT="http://127.0.0.1:11434/v1"
-TOKEN=""  # Set if DOMShell MCP server requires auth
+TOKEN="52642f3f8e93d6be3e59aa90aa3526d06392a2cb5493aaf4"
 
 TASK1='Go to https://en.wikipedia.org/wiki/Artificial_intelligence and return the page title.'
 TASK2='Go to https://en.wikipedia.org/wiki/Artificial_intelligence and extract the first paragraph of the article body.'

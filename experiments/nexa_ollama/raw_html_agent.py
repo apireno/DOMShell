@@ -134,32 +134,19 @@ TOOLS = {
 # System prompt
 # ---------------------------------------------------------------------------
 
-SYSTEM_PROMPT_TEMPLATE = """\
-You are a web scraping agent. You have two tools:
-
-1. fetch_page(url) — Fetch a web page and get its cleaned text content.
-2. extract(selector) — Run a CSS selector on the last fetched page to get specific elements.
-
-EXAMPLE CALLS:
-{{"name": "fetch_page", "arguments": {{"url": "https://en.wikipedia.org/wiki/Artificial_intelligence"}}}}
-{{"name": "extract", "arguments": {{"selector": "h1"}}}}
-{{"name": "extract", "arguments": {{"selector": "#mw-content-text p:first-of-type"}}}}
-{{"name": "extract", "arguments": {{"selector": "h2, h3"}}}}
-
-WORKFLOW: fetch_page to load the page, then extract with CSS selectors to get specific content.
-
-AVAILABLE TOOLS:
-1. fetch_page: Fetch a web page and return its cleaned text content (scripts/styles removed, max 4K chars).
-  url (string) (REQUIRED): The URL to fetch
-
-2. extract: Run a CSS selector on the last fetched page. Returns text of matching elements (max 20 matches).
-  selector (string) (REQUIRED): CSS selector (e.g. 'h1', 'p:first-of-type', 'h2, h3')
-
-RESPONSE FORMAT:
-- To call a tool, respond with ONLY a JSON object: {{"name": "tool_name", "arguments": {{"param": "value"}}}}
-- To give your final answer, respond in plain natural language (NO JSON).
-- After each tool result, decide if you need more calls or can answer.
-- Be efficient — use the minimum number of tool calls needed."""
+SYSTEM_PROMPT_TEMPLATE = (
+    'You are a web scraping agent. Call tools by responding with ONLY JSON.\n'
+    '\n'
+    'TOOLS:\n'
+    '1. fetch_page(url) — fetch a web page, returns cleaned text\n'
+    '2. extract(selector) — CSS selector on last fetched page\n'
+    '\n'
+    'EXAMPLES:\n'
+    '{"name": "fetch_page", "arguments": {"url": "https://example.com"}}\n'
+    '{"name": "extract", "arguments": {"selector": "h1"}}\n'
+    '\n'
+    'When done, respond in plain text (no JSON).'
+)
 
 
 # ---------------------------------------------------------------------------
@@ -277,7 +264,13 @@ def generate_response(
     if not choices:
         return "(empty response from model)"
 
-    content = choices[0].get("message", {}).get("content", "")
+    msg = choices[0].get("message", {})
+    content = msg.get("content", "")
+    # Ollama puts Qwen3 thinking in a separate "reasoning" field and may
+    # return empty content.  Fall back to reasoning so the agent loop can
+    # still extract tool calls.
+    if not content and msg.get("reasoning"):
+        content = msg["reasoning"]
     return content.strip()
 
 

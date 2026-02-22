@@ -634,6 +634,25 @@ const COMMAND_HELP: Record<string, string> = {
     "Focuses the DOM element. Use before 'type' to direct keyboard input.",
   ].join("\r\n"),
 
+  scroll: [
+    "\x1b[1;36mscroll\x1b[0m \u2014 Scroll the page or scroll an element into view",
+    "",
+    "\x1b[33mUsage:\x1b[0m scroll [down|up] [N] | scroll <element_name>",
+    "",
+    "\x1b[33mModes:\x1b[0m",
+    "  \x1b[32mscroll down\x1b[0m             Scroll page down by 1 viewport height",
+    "  \x1b[32mscroll up\x1b[0m               Scroll page up by 1 viewport height",
+    "  \x1b[32mscroll down 3\x1b[0m           Scroll page down by 3 viewport heights",
+    "  \x1b[32mscroll element_name\x1b[0m     Scroll element into center of viewport",
+    "",
+    "Returns current scroll position as percentage.",
+    "",
+    "\x1b[33mExamples:\x1b[0m",
+    "  scroll down                    See more content below the fold",
+    "  scroll see_also_heading        Jump to a specific section",
+    "  find --type heading → scroll target_heading → text",
+  ].join("\r\n"),
+
   type: [
     "\x1b[1;36mtype\x1b[0m \u2014 Type text into the focused element",
     "",
@@ -1026,6 +1045,8 @@ async function executeCommand(raw: string): Promise<string> {
         return await handleType(args);
       case "focus":
         return await handleFocus(args);
+      case "scroll":
+        return await handleScroll(args);
       case "submit":
         return await handleSubmit(args);
       case "extract_links":
@@ -1976,6 +1997,35 @@ async function handleFocus(args: string[]): Promise<string> {
 
   await cdp.focusByBackendNodeId(match.backendDOMNodeId);
   return `\x1b[32m\u2713 Focused: ${match.name}\x1b[0m`;
+}
+
+// ---- scroll ----
+
+async function handleScroll(args: string[]): Promise<string> {
+  ensureInsideTab();
+  await ensureFreshTree();
+  const pa = parseArgs(args);
+
+  // Mode 1: scroll <element_name> — scroll into view
+  if (pa.positional.length > 0 && pa.positional[0] !== "up" && pa.positional[0] !== "down") {
+    const name = pa.positional[0];
+    const currentId = getCurrentNodeId();
+    const match = resolveByPath(currentId, name, nodeMap);
+    if (!match) return `\x1b[31mscroll: ${name}: No such element\x1b[0m`;
+    if (!match.backendDOMNodeId) return `\x1b[31mscroll: ${name}: No DOM node backing\x1b[0m`;
+    await cdp.scrollIntoView(match.backendDOMNodeId);
+    treeStale = true;
+    return `\x1b[32m\u2713 Scrolled into view: ${match.name}\x1b[0m`;
+  }
+
+  // Mode 2: scroll down [N] / scroll up [N]
+  const direction = (pa.positional[0] || "down") as "up" | "down";
+  const amount = pa.positional[1] ? parseFloat(pa.positional[1]) : 1;
+  const info = await cdp.scrollPage(direction, amount);
+  treeStale = true;
+  const maxScroll = info.scrollHeight - info.viewportHeight;
+  const pct = maxScroll > 0 ? Math.round((info.scrollY / maxScroll) * 100) : 0;
+  return `\x1b[32m\u2713 Scrolled ${direction} ${amount} viewport(s)\x1b[0m\r\n\x1b[90mPosition: ${info.scrollY}/${info.scrollHeight}px (${pct}%)\x1b[0m`;
 }
 
 // ---- type ----

@@ -371,6 +371,41 @@ export class CDPClient {
   }
 
   /**
+   * Scroll the page by viewport height increments.
+   */
+  async scrollPage(direction: "up" | "down", viewports: number = 1): Promise<{ scrollY: number; scrollHeight: number; viewportHeight: number }> {
+    const sign = direction === "down" ? "" : "-";
+    const { result } = await this.send<{ result: { value: any } }>(
+      "Runtime.evaluate",
+      {
+        expression: `(() => {
+          const vh = window.innerHeight;
+          const dy = ${sign}(vh * ${viewports});
+          window.scrollBy({ top: dy, behavior: 'instant' });
+          return { scrollY: Math.round(window.scrollY), scrollHeight: document.documentElement.scrollHeight, viewportHeight: vh };
+        })()`,
+        returnByValue: true,
+      }
+    );
+    return result.value;
+  }
+
+  /**
+   * Scroll a specific element into view by its backend DOM node ID.
+   */
+  async scrollIntoView(backendDOMNodeId: number): Promise<void> {
+    const { object } = await this.send<{ object: { objectId: string } }>(
+      "DOM.resolveNode",
+      { backendNodeId: backendDOMNodeId }
+    );
+    await this.send("Runtime.callFunctionOn", {
+      objectId: object.objectId,
+      functionDeclaration: `function() { this.scrollIntoView({ block: 'center', inline: 'nearest' }); }`,
+      returnByValue: true,
+    });
+  }
+
+  /**
    * Fetch AX trees for all frames (main + iframes) and merge them.
    * Iframe roots are injected as children of the node that owns them.
    */

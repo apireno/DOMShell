@@ -607,6 +607,8 @@ Options:
 | `focus <name>` | Focus an input element |
 | `type <text>` | Type text into the focused element |
 | `submit <input> <val>` | Atomic form fill: focus + clear + type + submit (`--submit btn` or Enter) |
+| `scroll [down\|up] [N]` | Scroll page by N viewport heights (default: 1). Returns scroll position %. |
+| `scroll <name>` | Scroll a specific element into the center of the viewport |
 | `refresh` | Force re-fetch the Accessibility Tree |
 
 ### System
@@ -889,7 +891,7 @@ The MCP server is hardened with multiple layers of security. **By default, it's 
 |------|----------|---------|-------------|
 | **Read** | `ls`, `cd`, `pwd`, `cat`, `text`, `grep`, `find`, `tree`, `refresh`, `tabs`, `windows`, `here` | Enabled | *(always on)* |
 | **Navigate** | `navigate`, `goto`, `open` | **Disabled** | `--allow-write` |
-| **Write** | `click`, `focus`, `type` | **Disabled** | `--allow-write` |
+| **Write** | `click`, `focus`, `type`, `scroll` | **Disabled** | `--allow-write` |
 | **Sensitive** | `whoami` (exposes cookies) | **Disabled** | `--allow-sensitive` |
 
 The **Navigate** tier is separate from Write because navigation is equivalent to typing a URL — it requires `--allow-write` but skips the interactive confirmation prompt. This is important for Claude Desktop where `/dev/tty` is unavailable.
@@ -898,7 +900,7 @@ The **Navigate** tier is separate from Write because navigation is equivalent to
 
 | Flag | Description |
 |------|-------------|
-| `--allow-write` | Enable click/focus/type commands |
+| `--allow-write` | Enable click/focus/type/scroll commands |
 | `--allow-sensitive` | Enable whoami (cookie access) |
 | `--allow-all` | Shorthand for both |
 | `--no-confirm` | Skip user confirmation for write actions (use with caution) |
@@ -976,6 +978,7 @@ dom@shell:$ disconnect
 | `domshell_open` | `open <url>` (new tab) | Navigate |
 | `domshell_click` | `click <name>` | Write |
 | `domshell_focus` | `focus <name>` | Write |
+| `domshell_scroll` | `scroll [down\|up] [N]` or `scroll <target>` | Write |
 | `domshell_type` | `type <text>` | Write |
 | `domshell_submit` | `submit <input> <value> [--submit btn]` (atomic form fill) | Write |
 | `domshell_whoami` | `whoami` | Sensitive |
@@ -999,7 +1002,7 @@ dom@shell:$ disconnect
 - [ ] **`screenshot`** — capture a screenshot of the current tab (useful for visual verification alongside AX tree inspection)
 - [x] **`pipe` / `|`** — pipe output between commands (e.g. `find --type link | grep login`)
 - [ ] **`select <name>`** — select an option from a `<select>` dropdown by value or visible text
-- [ ] **`scroll`** — scroll the page or a specific element (`scroll down`, `scroll up`, `scroll <name>`)
+- [x] **`scroll`** — scroll the page or a specific element (`scroll down`, `scroll up`, `scroll <name>`)
 - [ ] **`wait`** — wait for a specific element to appear (e.g. `wait submit_btn` blocks until it exists in the tree)
 - [ ] **`for` loop** — iterate over elements (e.g. `for item in $(find --type link); do cat $item; done`) — basic shell-style looping for batch operations
 - [ ] **`.sh` scripts** — save and execute multi-command shell scripts (e.g. `run scrape.sh`) for repeatable workflows

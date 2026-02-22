@@ -85,10 +85,12 @@ EXAMPLE CALLS:
 COMMANDS: tabs, open <url>, navigate <url>, cd <path>, ls, find [pattern], \
 find --type TYPE (accepts aliases: input, dropdown, nav, toggle, modal, image, btn, etc.), \
 grep <pattern>, text [name], text --links [name], cat <name>, extract_links, \
-extract_table <name>, click <name>, focus <name>, type <text>, submit <input> <value>
+extract_table <name>, click <name>, focus <name>, type <text>, submit <input> <value>, \
+scroll down [N], scroll up [N], scroll <element_name>
 
 WORKFLOW: tabs → open URL → cd section → text to read content.
 Use "text --links <name>" to get text with link URLs inline as [text](url).
+Use "scroll down" to see below-the-fold content, "scroll element_name" to jump to a section.
 
 When done, respond in plain text (no JSON)."""
 
@@ -103,8 +105,9 @@ TYPICAL WORKFLOW:
 2. Understand structure: domshell_tree (overview), domshell_ls (children)
 3. Extract content: domshell_text (bulk text — much faster than multiple cat calls)
 4. Find specific elements: domshell_find with pattern or --type (exact roles OR aliases: input, dropdown, nav, toggle, modal, image, btn, anchor, sidebar, header, footer, searchbar)
-5. Inspect details: domshell_cat shows full metadata — AX role, DOM tag, href, src, id, class, outerHTML
-6. Interact: domshell_click, domshell_focus + domshell_type, or domshell_submit (atomic form fill)
+5. Scroll to reach content: domshell_scroll down (page) or domshell_scroll with target (element into view)
+6. Inspect details: domshell_cat shows full metadata — AX role, DOM tag, href, src, id, class, outerHTML
+7. Interact: domshell_click, domshell_focus + domshell_type, or domshell_submit (atomic form fill)
 
 BROWSER HIERARCHY:
 - "~" or "/" = browser root. "ls" shows windows/ and tabs/.
@@ -121,6 +124,7 @@ EFFICIENT PATTERNS:
 6. Sibling Navigation: ls --after heading_name -n 5 --text (elements after a heading)
 7. Form Interaction: domshell_submit for atomic fill, or focus → type → click
 8. Link URLs: find --type link --meta (shows href per link) OR text --links (inline in text)
+9. Below-the-fold: scroll down → ls --text. For known targets: find --type heading → scroll target → text
 
 COMMAND CHAINING:
 grep discovers sections → cd scopes context → text/find/extract extracts content.

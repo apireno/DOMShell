@@ -54,7 +54,7 @@ function audit(entry: string): void {
 // ---- Command Tiers ----
 
 const NAVIGATE_COMMANDS = new Set(["navigate", "goto", "open"]);
-const WRITE_COMMANDS = new Set(["click", "focus", "type"]);
+const WRITE_COMMANDS = new Set(["click", "focus", "type", "scroll"]);
 const SENSITIVE_COMMANDS = new Set(["whoami"]);
 
 function getCommandTier(command: string): "read" | "navigate" | "write" | "sensitive" {
@@ -282,6 +282,7 @@ WHEN TO USE DOMSHELL (prefer over native browser tools):
 - Reading page content: domshell_text for bulk text, domshell_cat for element metadata, domshell_tree for structure
 - Finding elements: domshell_find (deep recursive) or domshell_grep (current directory)
 - Getting URLs/hrefs: domshell_cat on a link shows its URL, or domshell_find with --meta --type link
+- Scrolling to see more content: domshell_scroll down/up, or scroll a specific element into view
 - Interacting: domshell_click, domshell_focus, domshell_type
 
 TYPICAL WORKFLOW:
@@ -289,8 +290,9 @@ TYPICAL WORKFLOW:
 2. Understand structure: domshell_tree (overview), domshell_ls (children)
 3. Extract content: domshell_text (bulk text — much faster than multiple cat calls)
 4. Find specific elements: domshell_find with pattern or --type (e.g. --type link, --type button)
-5. Inspect element details: domshell_cat shows full metadata — AX role, DOM tag, href/src/id/class, text, outerHTML
-6. Interact: domshell_click, domshell_focus + domshell_type
+5. Scroll to reach content: domshell_scroll down (page) or domshell_scroll with target (element into view)
+6. Inspect element details: domshell_cat shows full metadata — AX role, DOM tag, href/src/id/class, text, outerHTML
+7. Interact: domshell_click, domshell_focus + domshell_type
 
 BROWSER HIERARCHY:
 - "~" or "/" = browser root. "ls" shows windows/ and tabs/.
@@ -309,22 +311,27 @@ READING ELEMENT METADATA:
 - domshell_ls with --text option shows visible text preview (innerText) per element. Combine with --meta: "ls --meta --text".
 - domshell_find with --meta option shows href/src/id inline for each search result. Use "find --type link --meta" to get all URLs on a page.
 - domshell_find with --text option shows visible text preview per result. Use "find --type link --meta --text" to get all URLs with their link text.
+- domshell_text with --links option inlines hyperlink URLs as markdown [text](url) within the text content. Use "text --links" to get article text with clickable links preserved.
 
 IMPORTANT TIPS:
 - Element names are human-readable (e.g. "Sign_in_btn", "Search_input") not CSS selectors.
 - Use domshell_text for reading article content — it's one call vs. dozens of cat calls.
 - Use domshell_find --type link --meta to extract all URLs from a page.
+- find --type accepts natural aliases: input (textbox/searchbox/combobox), dropdown (combobox/listbox), nav (navigation), btn (button), toggle (switch/checkbox), modal (dialog), image (img), sidebar (complementary).
 - Directories (navigation/, main/) are containers you cd into. Files (submit_btn, logo_link) are leaf elements you cat or click.
+- Use domshell_scroll to reach below-the-fold content. Scroll returns position percentage so you know where you are on the page.
+- Use domshell_scroll with a target element name to jump directly to a section (e.g. scroll see_also_heading).
 - The AXTree auto-refreshes after clicks/navigation — no manual refresh needed.
 
 EFFICIENT PATTERNS:
 1. Scoped Extraction: open URL → cd main/article → find --type heading (locate section) → cd section → text (content) + find --type link --meta (links)
 2. Table Reading: find --type table → text table_element (reads ALL rows at once). For structured data, read the whole table, don't read row-by-row.
 3. Section Discovery: grep "section_name" (recursive: true) OR find "section_name". NOT ls --offset pagination (too many calls).
-4. Link Extraction: cd into the container with links → find --type link --meta. Use --text with a pattern to filter by visible text: find --type link --text "keyword" --meta.
+4. Link Extraction: cd into the container with links → find --type link --meta. Use --text with a pattern to filter by visible text: find --type link --text "keyword" --meta. For inline links within text: text --links (preserves [text](url) markdown in the output).
 5. Form Interaction: find --type textbox → focus input → type "query" → click submit_button. If page doesn't navigate, use domshell_navigate as fallback.
 6. Path Resolution: All commands accept relative paths — text main/article/paragraph, cat nav/logo_link, click form/submit_btn. Saves cd round-trips.
 7. Sibling Navigation: find --type heading "section" → cd container → ls --after section_heading -n 5 --text (elements after a heading). Combines with --type: ls --after intro --type link --meta.
+8. Below-the-fold Content: scroll down → ls --text (see what's visible). For known targets: find --type heading → scroll target_heading → text nearby_content. Returns position as percentage for orientation.
 
 COMMAND CHAINING (grep is the linchpin):
 grep discovers sections and elements by name, giving you paths for subsequent commands. Chain pattern: grep (locate) → cd (scope) → extract (read/find/text). Examples:
@@ -356,6 +363,7 @@ ANTI-PATTERNS (avoid these):
 - Do NOT call text on individual rows/items — text the parent container instead (one call replaces N)
 - Do NOT make multiple cat calls for content — use text for bulk content, find --meta for properties
 - Do NOT cd into a leaf element (links, buttons) — use cat element_name or text element_name instead
+- Do NOT repeatedly ls --offset to find content far down the page — use scroll down + ls --text, or find the target element and scroll it into view
 
 Note: Use --no-confirm when starting the server to skip interactive confirmation prompts for write actions.`;
 
@@ -573,6 +581,26 @@ function createMcpServer(): McpServer {
       async ({ name }) => ({
         content: [{ type: "text", text: await executeWithSecurity(`focus ${name}`) }],
       })
+    );
+
+    server.tool(
+      "domshell_scroll",
+      "Scroll the page or scroll a specific element into view. Use this when content is below the fold or when you need to reach elements not currently visible.\n\nModes:\n  scroll down [N]      Scroll page down by N viewport heights (default: 1)\n  scroll up [N]        Scroll page up by N viewport heights (default: 1)\n  scroll element_name  Scroll a specific element into the center of the viewport\n\nReturns current scroll position as percentage. Use after scrolling to verify position.\n\nCommon patterns:\n  scroll down → ls --text (see what's now visible)\n  scroll heading_name (jump to a section)\n  find --type heading → scroll target_heading (locate then scroll)",
+      {
+        direction: z.enum(["up", "down"]).optional().describe("Scroll direction. Omit when scrolling an element into view."),
+        amount: z.number().optional().describe("Number of viewport heights to scroll (default: 1)"),
+        target: z.string().optional().describe("Element name or path to scroll into view (e.g. 'see_also_heading', 'main/article/table_123')"),
+      },
+      async ({ direction, amount, target }) => {
+        let cmd = "scroll";
+        if (target) {
+          cmd += ` ${target}`;
+        } else {
+          cmd += ` ${direction || "down"}`;
+          if (amount && amount !== 1) cmd += ` ${amount}`;
+        }
+        return { content: [{ type: "text", text: await executeWithSecurity(cmd) }] };
+      }
     );
 
     server.tool(

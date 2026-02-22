@@ -476,15 +476,17 @@ function createMcpServer(): McpServer {
 
   server.tool(
     "domshell_text",
-    "Extract ALL text content from the current directory or a named child, including every descendant. Returns full textContent in a single call.\n\nThe name parameter lets you read any child without cd'ing into it first:\n  text paragraph_2994      Read a paragraph's text without cd'ing into it\n  text table_1234          Read an ENTIRE table (all rows, all cells) in one call\n  text list_5678           Read all list items at once\n  text                     Read everything under current directory\n\nEfficiency tip: call text on the HIGHEST container that has the content you need.\n  - Need a table? text on the table element, not individual rows.\n  - Need a section? text on the section container, not each paragraph.\n  - Need article body? cd into article/main, then text with no args.\n\nOne text call on a parent replaces N calls on its children.",
+    "Extract ALL text content from the current directory or a named child, including every descendant. Returns full textContent in a single call.\n\nThe name parameter lets you read any child without cd'ing into it first:\n  text paragraph_2994      Read a paragraph's text without cd'ing into it\n  text table_1234          Read an ENTIRE table (all rows, all cells) in one call\n  text list_5678           Read all list items at once\n  text                     Read everything under current directory\n\nEfficiency tip: call text on the HIGHEST container that has the content you need.\n  - Need a table? text on the table element, not individual rows.\n  - Need a section? text on the section container, not each paragraph.\n  - Need article body? cd into article/main, then text with no args.\n\nOne text call on a parent replaces N calls on its children.\n\nUse links=true to include hyperlink URLs inline as markdown [text](url). This lets you extract both text content and link destinations in a single call.",
     {
       name: z.string().optional().describe("Name or path of element to extract text from (e.g. 'paragraph' or 'article/paragraph'). Default: current directory"),
       limit: z.number().optional().describe("Maximum characters to return"),
+      links: z.boolean().optional().describe("Include link URLs inline as [text](url) markdown"),
     },
-    async ({ name, limit }) => {
+    async ({ name, limit, links }) => {
       let cmd = "text";
       if (name) cmd += ` ${name}`;
       if (limit) cmd += ` -n ${limit}`;
+      if (links) cmd += ` --links`;
       return { content: [{ type: "text", text: await executeWithSecurity(cmd) }] };
     }
   );

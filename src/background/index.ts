@@ -1861,6 +1861,7 @@ async function handleText(args: string[]): Promise<string> {
 
   const pa = parseArgs(args);
   const maxLength = pa.named["-n"] ? parseInt(pa.named["-n"], 10) : 0;
+  const withLinks = pa.flags.has("--links");
 
   let backendId: number | undefined;
   let targetName = "current directory";
@@ -1887,7 +1888,9 @@ async function handleText(args: string[]): Promise<string> {
   }
 
   try {
-    let text = await cdp.getTextContent(backendId);
+    let text = withLinks
+      ? await cdp.getTextContentWithLinks(backendId)
+      : await cdp.getTextContent(backendId);
     text = text.trim();
 
     if (!text) {
@@ -1895,7 +1898,8 @@ async function handleText(args: string[]): Promise<string> {
     }
 
     const lines: string[] = [];
-    lines.push(`\x1b[1;36m--- Text: ${targetName} ---\x1b[0m`);
+    const header = withLinks ? `Text (with links): ${targetName}` : `Text: ${targetName}`;
+    lines.push(`\x1b[1;36m--- ${header} ---\x1b[0m`);
 
     if (maxLength > 0 && text.length > maxLength) {
       lines.push(text.slice(0, maxLength));

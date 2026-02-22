@@ -83,10 +83,11 @@ EXAMPLE CALLS:
 {"name": "domshell_execute", "arguments": {"command": "find --type heading"}}
 
 COMMANDS: tabs, open <url>, navigate <url>, cd <path>, ls, find [pattern], \
-grep <pattern>, text [name], cat <name>, extract_links, extract_table <name>, \
-click <name>, focus <name>, type <text>, submit <input> <value>
+grep <pattern>, text [name], text --links [name], cat <name>, extract_links, \
+extract_table <name>, click <name>, focus <name>, type <text>, submit <input> <value>
 
 WORKFLOW: tabs → open URL → cd section → text to read content.
+Use "text --links <name>" to get text with link URLs inline as [text](url).
 
 When done, respond in plain text (no JSON)."""
 
@@ -114,10 +115,11 @@ EFFICIENT PATTERNS:
 1. Path Resolution: All commands accept relative paths — text main/article/paragraph
 2. Scoped Extraction: open URL → cd main/article → find --type heading → cd section → text
 3. Table Reading: find --type table → text table_element (reads ALL rows at once)
-4. Link Extraction: find --type link --meta (shows href inline for every link)
+4. Link Extraction: text --links section (gets text AND link URLs in one call)
 5. Section Discovery: grep "section_name" (recursive) — NOT ls pagination
 6. Sibling Navigation: ls --after heading_name -n 5 --text (elements after a heading)
 7. Form Interaction: domshell_submit for atomic fill, or focus → type → click
+8. Link URLs: find --type link --meta (shows href per link) OR text --links (inline in text)
 
 COMMAND CHAINING:
 grep discovers sections → cd scopes context → text/find/extract extracts content.

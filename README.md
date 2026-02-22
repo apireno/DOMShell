@@ -83,7 +83,7 @@ Open any webpage, then open the DOMShell side panel. You'll see a terminal:
 
 ```
 ╔══════════════════════════════════════╗
-║   DOMShell v1.0.0                    ║
+║   DOMShell v1.1.0                    ║
 ║   The browser is your filesystem.    ║
 ╚══════════════════════════════════════╝
 
@@ -285,6 +285,14 @@ dom@shell:~$text main
 
 # Limit output length
 dom@shell:~$text main -n 500
+
+# Include link URLs inline as markdown [text](url)
+dom@shell:~$text --links main/article/paragraph_2978
+--- Text (with links): paragraph_2978 ---
+Artificial intelligence (AI) is the capability of [computational systems](https://en.wikipedia.org/wiki/Computer)
+to perform tasks typically associated with [human intelligence](https://en.wikipedia.org/wiki/Human_intelligence),
+such as [learning](https://en.wikipedia.org/wiki/Learning), [reasoning](https://en.wikipedia.org/wiki/Reason)...
+(text + link URLs in a single call)
 
 # Get a tree view (default depth: 2)
 dom@shell:~$tree
@@ -589,7 +597,7 @@ Options:
 | `pwd` | Print current path (DOM path or browser path) |
 | `tree [depth]` | Tree view of current node (default depth: 2) |
 | `cat <name>` | Full element metadata: AX info + DOM properties (tag, href, src, id, class, outerHTML) |
-| `text [name] [-n N]` | Bulk extract all text from a section (much faster than multiple `cat`) |
+| `text [name] [-n N] [--links]` | Bulk extract all text from a section (`--links` inlines URLs as `[text](url)`) |
 | `read [name] [opts]` | Structured subtree extraction (`--meta`, `--text`, `-d N` depth) — tree + content in one call |
 | `grep [opts] <pattern>` | Search by name/role/value (`-r` recursive, `--content` match visible text, `-n N` limit) |
 | `find [opts] <pattern>` | Deep recursive search (`--type ROLE`, `--meta`, `--text`, `--content`, `-n N`) |
@@ -956,7 +964,7 @@ dom@shell:$ disconnect
 | `domshell_cd` | `cd <path>` (`~`, `~/tabs/`, `/`, `..`) | Read |
 | `domshell_pwd` | `pwd` | Read |
 | `domshell_cat` | `cat <name>` | Read |
-| `domshell_text` | `text [name] [-n N]` (bulk text extraction) | Read |
+| `domshell_text` | `text [name] [-n N] [--links]` (bulk text; `links=true` inlines URLs) | Read |
 | `domshell_read` | `read [name] [--meta] [--text] [-d N]` (structured subtree) | Read |
 | `domshell_find` | `find [pattern] [--type ROLE] [--meta] [--text] [-n N]` | Read |
 | `domshell_grep` | `grep [-r] [-n N] [--content] <pattern>` (section discovery) | Read |
@@ -1009,6 +1017,7 @@ dom@shell:$ disconnect
 - [x] **`--content` matching** — search by visible text content with `grep --content` and `find --content` (or `find --text "pattern"`) — finds elements by what they display, not just their AX name
 - [x] **Path resolution** — all commands accept relative paths (e.g. `text main/article/paragraph`, `click form/submit_btn`) — eliminates unnecessary `cd` round-trips
 - [x] **Sibling navigation** — `--after`/`--before` flags on `ls` to slice children relative to a landmark element (e.g. `ls --after heading --type link --meta`)
+- [x] **`--links` flag on `text`** — include hyperlink URLs inline as markdown `[text](url)` in text output; extracts both content and link destinations in a single call (e.g. `text --links main/paragraph`)
 - [ ] **`bookmark` / `alias`** — save named paths for quick navigation (e.g. `bookmark inbox ~/tabs/gmail/main/inbox_list`)
 - [ ] **Multi-tab operations** — run a command across multiple tabs (e.g. `each tab text main` to extract text from every open tab)
 - [ ] **Structured output mode** — `--json` flag on commands for machine-parseable output (e.g. `ls --json`, `cat --json`)
@@ -1025,8 +1034,9 @@ dom@shell:$ disconnect
 
 ### Experiments
 
-- [ ] **Nexa: DOMShell vs Raw HTML** — same model (Qwen3-4B), same tasks: compare DOMShell's text/AX-tree interface against raw HTML scraping. Tests on both nexa serve and Ollama backends. Validates the interface design, not the model. See `experiments/nexa_ollama/`.
-- [x] **Nexa vs Claude (model size)** — compared Qwen3-1.7B/4B against Claude Opus on the same DOMShell tasks. Result: 0/12 — capability gap is binary, not gradual. See `experiments/nexa_claude/`.
+- [x] **Nexa: DOMShell vs Raw HTML** — same model (Qwen3-4B), same tasks: compare DOMShell's text/AX-tree interface against raw HTML scraping. Tests on both nexa serve and Ollama backends. Found a crossover interaction: Ollama+DOMShell and Nexa+HTML are equally best (1.20 avg). See `experiments/nexa_ollama/`.
+- [x] **Nexa vs Claude (model size)** — compared Qwen3-1.7B/4B on progressive tasks. Capability cliff at T3 (paragraph extraction). 4B shows better error recovery. See `experiments/nexa_claude/`.
+- [x] **Model shootout** — compared Qwen3-4B, Hermes3-3B, Granite4-Tiny, Llama3.2-3B on Ollama+DOMShell. Qwen3-4B remains best (8/15), only model to break the T3 cliff. Llama3.2-3B close second (7/15, zero hallucinations). See `experiments/model_shootout/`.
 
 ## Integrations
 

@@ -212,6 +212,51 @@ export class CDPClient {
   }
 
   /**
+   * Extract text content with link URLs inlined as markdown [text](url).
+   * Uses a single CDP call to walk the DOM tree efficiently.
+   */
+  async getTextContentWithLinks(backendDOMNodeId: number): Promise<string> {
+    const { object } = await this.send<{ object: { objectId: string } }>(
+      "DOM.resolveNode",
+      { backendNodeId: backendDOMNodeId }
+    );
+
+    const { result } = await this.send<{ result: { value: string } }>(
+      "Runtime.callFunctionOn",
+      {
+        objectId: object.objectId,
+        functionDeclaration: `function() {
+          function walk(node) {
+            var out = '';
+            for (var i = 0; i < node.childNodes.length; i++) {
+              var child = node.childNodes[i];
+              if (child.nodeType === 3) {
+                out += child.textContent;
+              } else if (child.nodeType === 1) {
+                if (child.tagName === 'A' && child.href) {
+                  var text = (child.innerText || '').trim();
+                  if (text) {
+                    out += '[' + text + '](' + child.href + ')';
+                  } else {
+                    out += child.href;
+                  }
+                } else {
+                  out += walk(child);
+                }
+              }
+            }
+            return out;
+          }
+          return walk(this);
+        }`,
+        returnByValue: true,
+      }
+    );
+
+    return result.value;
+  }
+
+  /**
    * Read the visible (rendered) text of an element using innerText.
    * Unlike textContent, innerText respects CSS visibility (display:none, etc.)
    * and returns only what the user would see on the rendered page.

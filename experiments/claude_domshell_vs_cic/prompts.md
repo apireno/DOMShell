@@ -195,6 +195,86 @@ OUTPUT FORMAT:
 
 ---
 
+## Task 4: Pagination + Comment Extraction (Hacker News)
+
+### Trial 13 / Trial 15: Task 4 — DOMShell
+
+```
+RULES — read these first:
+- You MUST use domshell MCP tools exclusively. No other browser tools.
+- You MUST actually navigate to the page and read its content using your tools. Do NOT use prior knowledge or training data to answer. Every fact in your response must come from what you read on the page.
+- If you cannot find an element after 3 attempts, skip it and note it as "[not found]".
+- Do not explore the page beyond what is needed for the task.
+- Be fast and direct. Minimize unnecessary tool calls.
+- If you are still working after 20 tool calls, wrap up immediately with whatever you have.
+- Return partial results rather than nothing.
+
+TASK:
+Go to https://news.ycombinator.com/. Extract the title, URL, and point count of stories ranked #1 and #30 on the front page. Then click "More" at the bottom to go to page 2 and extract the title and URL of the first story (ranked #31). Finally, go back to page 1, navigate to the comments page of story #1, and extract the username and first sentence of the top 3 comments.
+
+OUTPUT FORMAT:
+## Page 1
+### Story #1
+- Title: ...
+- URL: ...
+- Points: ...
+
+### Story #30
+- Title: ...
+- URL: ...
+- Points: ...
+
+## Page 2
+### Story #31
+- Title: ...
+- URL: ...
+
+## Comments (Story #1)
+1. [username]: [first sentence]
+2. [username]: [first sentence]
+3. [username]: [first sentence]
+```
+
+### Trial 14 / Trial 16: Task 4 — Claude in Chrome
+
+```
+RULES — read these first:
+- You MUST use your browser tools (navigate, read_page, find, get_page_text, etc.) to complete this task. Do NOT use domshell or any external MCP tools.
+- You MUST actually navigate to the page and read its content using your tools. Do NOT use prior knowledge or training data to answer. Every fact in your response must come from what you read on the page.
+- If you cannot find an element after 3 attempts, skip it and note it as "[not found]".
+- Do not explore the page beyond what is needed for the task.
+- Be fast and direct. Minimize unnecessary tool calls.
+- If you are still working after 20 tool calls, wrap up immediately with whatever you have.
+- Return partial results rather than nothing.
+
+TASK:
+Go to https://news.ycombinator.com/. Extract the title, URL, and point count of stories ranked #1 and #30 on the front page. Then click "More" at the bottom to go to page 2 and extract the title and URL of the first story (ranked #31). Finally, go back to page 1, navigate to the comments page of story #1, and extract the username and first sentence of the top 3 comments.
+
+OUTPUT FORMAT:
+## Page 1
+### Story #1
+- Title: ...
+- URL: ...
+- Points: ...
+
+### Story #30
+- Title: ...
+- URL: ...
+- Points: ...
+
+## Page 2
+### Story #31
+- Title: ...
+- URL: ...
+
+## Comments (Story #1)
+1. [username]: [first sentence]
+2. [username]: [first sentence]
+3. [username]: [first sentence]
+```
+
+---
+
 ## Tool Call Caps Summary
 
 | Task | Complexity | Tool call cap |
@@ -202,5 +282,6 @@ OUTPUT FORMAT:
 | Task 1 | Read-only extraction | 15 calls |
 | Task 2 | Search + navigate + extract | 20 calls |
 | Task 3 | Multi-page navigation + table extraction | 25 calls |
+| Task 4 | Pagination + comment extraction | 20 calls |
 
 Wall clock time is informative but not enforced in Cowork (interactive sessions). Tool call count is the primary efficiency metric.

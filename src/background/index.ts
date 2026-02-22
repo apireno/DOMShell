@@ -2082,7 +2082,7 @@ async function handleExtractLinks(args: string[]): Promise<string> {
 
   // Collect all link nodes recursively
   const results: Array<{ path: string; node: VFSNode }> = [];
-  await findRecursive(targetId, "", "", "link", results, new Set(), limit || 200);
+  await findRecursive(targetId, "", "", expandTypeFilter("link"), results, new Set(), limit || 200);
 
   if (results.length === 0) return "\x1b[33m(no links found)\x1b[0m";
 

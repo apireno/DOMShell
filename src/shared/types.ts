@@ -147,3 +147,34 @@ export const INTERACTIVE_ROLES = new Set([
   "spinbutton",
   "searchbox",
 ]);
+
+// Natural-language aliases for AX roles — used by find --type to accept
+// common terms that models guess instead of exact role names
+export const ROLE_ALIASES: Record<string, string[]> = {
+  // Input elements
+  "input":     ["textbox", "searchbox", "combobox", "spinbutton"],
+  "field":     ["textbox", "searchbox", "combobox", "spinbutton"],
+  "textarea":  ["textbox"],
+  "dropdown":  ["combobox", "listbox"],
+  "select":    ["combobox", "listbox"],
+  "password":  ["textbox"],
+
+  // Interactive
+  "toggle":    ["switch", "checkbox"],
+  "check":     ["checkbox", "switch"],
+  "btn":       ["button"],
+  "anchor":    ["link"],
+  "href":      ["link"],
+
+  // Containers / landmarks
+  "nav":       ["navigation"],
+  "sidebar":   ["complementary"],
+  "header":    ["banner"],
+  "footer":    ["contentinfo"],
+  "modal":     ["dialog", "alertdialog"],
+  "popup":     ["dialog", "alertdialog"],
+  "searchbar": ["searchbox", "search"],
+  "image":     ["img"],
+  "pic":       ["img"],
+  "paragraph": ["paragraph"],
+};

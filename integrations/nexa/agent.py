@@ -83,6 +83,7 @@ EXAMPLE CALLS:
 {"name": "domshell_execute", "arguments": {"command": "find --type heading"}}
 
 COMMANDS: tabs, open <url>, navigate <url>, cd <path>, ls, find [pattern], \
+find --type TYPE (accepts aliases: input, dropdown, nav, toggle, modal, image, btn, etc.), \
 grep <pattern>, text [name], text --links [name], cat <name>, extract_links, \
 extract_table <name>, click <name>, focus <name>, type <text>, submit <input> <value>
 
@@ -101,7 +102,7 @@ TYPICAL WORKFLOW:
 1. Enter a tab: use domshell_open (new tab) or domshell_here (focused tab)
 2. Understand structure: domshell_tree (overview), domshell_ls (children)
 3. Extract content: domshell_text (bulk text — much faster than multiple cat calls)
-4. Find specific elements: domshell_find with pattern or --type (link, button, heading)
+4. Find specific elements: domshell_find with pattern or --type (exact roles OR aliases: input, dropdown, nav, toggle, modal, image, btn, anchor, sidebar, header, footer, searchbar)
 5. Inspect details: domshell_cat shows full metadata — AX role, DOM tag, href, src, id, class, outerHTML
 6. Interact: domshell_click, domshell_focus + domshell_type, or domshell_submit (atomic form fill)
 

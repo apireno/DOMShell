@@ -8,7 +8,7 @@ import {
   resolveByPath,
 } from "./vfs_mapper.ts";
 import type { AXNode, ShellState, VFSNode } from "../shared/types.ts";
-import { INTERACTIVE_ROLES } from "../shared/types.ts";
+import { INTERACTIVE_ROLES, ROLE_ALIASES } from "../shared/types.ts";
 
 // ---- State ----
 
@@ -2269,7 +2269,8 @@ async function handleFind(args: string[]): Promise<string> {
 
   const currentId = getCurrentNodeId();
   const results: Array<{ path: string; node: VFSNode }> = [];
-  await findRecursive(currentId, "", pattern, typeFilter, results, new Set(), limit, contentMatch);
+  const expandedTypes = typeFilter ? expandTypeFilter(typeFilter) : undefined;
+  await findRecursive(currentId, "", pattern, expandedTypes, results, new Set(), limit, contentMatch);
 
   if (results.length === 0) {
     const desc = typeFilter ? `type '${typeFilter}'` : `'${pattern}'`;
@@ -2306,11 +2307,21 @@ async function handleFind(args: string[]): Promise<string> {
   return lines.join("\r\n");
 }
 
+function expandTypeFilter(typeFilter: string): Set<string> {
+  const roles = new Set<string>();
+  roles.add(typeFilter);
+  const aliases = ROLE_ALIASES[typeFilter];
+  if (aliases) {
+    for (const a of aliases) roles.add(a);
+  }
+  return roles;
+}
+
 async function findRecursive(
   parentId: string,
   pathPrefix: string,
   pattern: string,
-  typeFilter: string | undefined,
+  expandedTypes: Set<string> | undefined,
   results: Array<{ path: string; node: VFSNode }>,
   visited: Set<string>,
   limit: number,
@@ -2326,7 +2337,7 @@ async function findRecursive(
     if (limit > 0 && results.length >= limit) return;
 
     // Check type filter first (cheap) before expensive content match
-    const matchesType = !typeFilter || child.role.toLowerCase() === typeFilter;
+    const matchesType = !expandedTypes || expandedTypes.has(child.role.toLowerCase());
 
     let matchesPattern = !pattern ||
       child.name.toLowerCase().includes(pattern) ||
@@ -2350,7 +2361,7 @@ async function findRecursive(
         child.axNodeId,
         pathPrefix + child.name + "/",
         pattern,
-        typeFilter,
+        expandedTypes,
         results,
         visited,
         limit,

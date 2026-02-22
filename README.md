@@ -600,7 +600,7 @@ Options:
 | `text [name] [-n N] [--links]` | Bulk extract all text from a section (`--links` inlines URLs as `[text](url)`) |
 | `read [name] [opts]` | Structured subtree extraction (`--meta`, `--text`, `-d N` depth) — tree + content in one call |
 | `grep [opts] <pattern>` | Search by name/role/value (`-r` recursive, `--content` match visible text, `-n N` limit) |
-| `find [opts] <pattern>` | Deep recursive search (`--type ROLE`, `--meta`, `--text`, `--content`, `-n N`) |
+| `find [opts] <pattern>` | Deep recursive search (`--type ROLE` with fuzzy aliases: input, dropdown, nav, toggle, modal, image, etc.; `--meta`, `--text`, `--content`, `-n N`) |
 | `extract_links [name]` | Extract all links as `[text](url)` format (`-n N` limit) |
 | `extract_table <name>` | Extract table as markdown or CSV (`--format csv`, `-n N` row limit) |
 | `click <name>` | Click an element (falls back to coordinate-based click) |
@@ -966,7 +966,7 @@ dom@shell:$ disconnect
 | `domshell_cat` | `cat <name>` | Read |
 | `domshell_text` | `text [name] [-n N] [--links]` (bulk text; `links=true` inlines URLs) | Read |
 | `domshell_read` | `read [name] [--meta] [--text] [-d N]` (structured subtree) | Read |
-| `domshell_find` | `find [pattern] [--type ROLE] [--meta] [--text] [-n N]` | Read |
+| `domshell_find` | `find [pattern] [--type ROLE/alias] [--meta] [--text] [-n N]` (type accepts fuzzy aliases: input, dropdown, nav, etc.) | Read |
 | `domshell_grep` | `grep [-r] [-n N] [--content] <pattern>` (section discovery) | Read |
 | `domshell_tree` | `tree [depth]` | Read |
 | `domshell_extract_links` | `extract_links [name] [-n N]` (all links as `[text](url)`) | Read |
@@ -1018,6 +1018,8 @@ dom@shell:$ disconnect
 - [x] **Path resolution** — all commands accept relative paths (e.g. `text main/article/paragraph`, `click form/submit_btn`) — eliminates unnecessary `cd` round-trips
 - [x] **Sibling navigation** — `--after`/`--before` flags on `ls` to slice children relative to a landmark element (e.g. `ls --after heading --type link --meta`)
 - [x] **`--links` flag on `text`** — include hyperlink URLs inline as markdown `[text](url)` in text output; extracts both content and link destinations in a single call (e.g. `text --links main/paragraph`)
+- [x] **Fuzzy type aliases for `find`** — `find --type` accepts natural-language aliases (input, dropdown, nav, toggle, modal, image, btn, sidebar, etc.) that expand to matching AX roles — eliminates wasted tool calls from guessing exact role names
+- [ ] **Visible text inheritance** — pre-compute visible text from descendant nodes and cache on VFS nodes for fast content-based search without per-node CDP calls
 - [ ] **`bookmark` / `alias`** — save named paths for quick navigation (e.g. `bookmark inbox ~/tabs/gmail/main/inbox_list`)
 - [ ] **Multi-tab operations** — run a command across multiple tabs (e.g. `each tab text main` to extract text from every open tab)
 - [ ] **Structured output mode** — `--json` flag on commands for machine-parseable output (e.g. `ls --json`, `cat --json`)

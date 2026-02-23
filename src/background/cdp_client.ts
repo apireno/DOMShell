@@ -348,6 +348,103 @@ export class CDPClient {
   }
 
   /**
+   * Navigate back in browser history. Returns the new URL, or null if no history.
+   */
+  async goBack(): Promise<string | null> {
+    const { currentIndex, entries } = await this.send<{
+      currentIndex: number;
+      entries: Array<{ id: number; url: string; title: string }>;
+    }>("Page.getNavigationHistory");
+
+    if (currentIndex <= 0) return null;
+
+    await this.send("Page.navigateToHistoryEntry", {
+      entryId: entries[currentIndex - 1].id,
+    });
+
+    return entries[currentIndex - 1].url;
+  }
+
+  /**
+   * Navigate forward in browser history. Returns the new URL, or null if no forward history.
+   */
+  async goForward(): Promise<string | null> {
+    const { currentIndex, entries } = await this.send<{
+      currentIndex: number;
+      entries: Array<{ id: number; url: string; title: string }>;
+    }>("Page.getNavigationHistory");
+
+    if (currentIndex >= entries.length - 1) return null;
+
+    await this.send("Page.navigateToHistoryEntry", {
+      entryId: entries[currentIndex + 1].id,
+    });
+
+    return entries[currentIndex + 1].url;
+  }
+
+  /**
+   * Capture a screenshot of the current tab.
+   */
+  async captureScreenshot(format: "png" | "jpeg" = "png", quality?: number): Promise<string> {
+    const params: Record<string, any> = { format };
+    if (format === "jpeg" && quality !== undefined) {
+      params.quality = quality;
+    }
+    const { data } = await this.send<{ data: string }>("Page.captureScreenshot", params);
+    return data;
+  }
+
+  /**
+   * Select an option in a <select> element by value or visible text.
+   */
+  async selectOption(backendDOMNodeId: number, value: string): Promise<string> {
+    const { object } = await this.send<{ object: { objectId: string } }>(
+      "DOM.resolveNode",
+      { backendNodeId: backendDOMNodeId }
+    );
+
+    const { result } = await this.send<{ result: { value: string } }>(
+      "Runtime.callFunctionOn",
+      {
+        objectId: object.objectId,
+        functionDeclaration: `function(val) {
+          if (this.tagName !== 'SELECT') return 'Error: not a <select> element (got <' + this.tagName.toLowerCase() + '>)';
+          // Try matching by value first
+          for (var i = 0; i < this.options.length; i++) {
+            if (this.options[i].value === val) {
+              this.value = val;
+              this.dispatchEvent(new Event('change', { bubbles: true }));
+              this.dispatchEvent(new Event('input', { bubbles: true }));
+              return 'Selected: ' + this.options[i].text + ' (value=' + val + ')';
+            }
+          }
+          // Fallback: match by visible text (case-insensitive)
+          var lower = val.toLowerCase();
+          for (var i = 0; i < this.options.length; i++) {
+            if (this.options[i].text.toLowerCase() === lower) {
+              this.value = this.options[i].value;
+              this.dispatchEvent(new Event('change', { bubbles: true }));
+              this.dispatchEvent(new Event('input', { bubbles: true }));
+              return 'Selected: ' + this.options[i].text + ' (value=' + this.options[i].value + ')';
+            }
+          }
+          // List available options
+          var opts = [];
+          for (var i = 0; i < this.options.length; i++) {
+            opts.push(this.options[i].text + ' [value=' + this.options[i].value + ']');
+          }
+          return 'Error: no option matching "' + val + '". Available: ' + opts.join(', ');
+        }`,
+        arguments: [{ value }],
+        returnByValue: true,
+      }
+    );
+
+    return result.value;
+  }
+
+  /**
    * Get the frame tree to discover iframes.
    */
   async getFrameTree(): Promise<FrameTreeNode> {

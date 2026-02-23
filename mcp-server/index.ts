@@ -53,8 +53,8 @@ function audit(entry: string): void {
 
 // ---- Command Tiers ----
 
-const NAVIGATE_COMMANDS = new Set(["navigate", "goto", "open"]);
-const WRITE_COMMANDS = new Set(["click", "focus", "type", "scroll", "js"]);
+const NAVIGATE_COMMANDS = new Set(["navigate", "goto", "open", "back", "forward"]);
+const WRITE_COMMANDS = new Set(["click", "focus", "type", "scroll", "js", "select", "close"]);
 const SENSITIVE_COMMANDS = new Set(["whoami"]);
 
 function getCommandTier(command: string): "read" | "navigate" | "write" | "sensitive" {
@@ -278,23 +278,29 @@ const MCP_INSTRUCTIONS = `DOMShell gives you full browser control through a file
 
 WHEN TO USE DOMSHELL (prefer over native browser tools):
 - Navigating to websites: use domshell_navigate or domshell_open
+- Going back/forward: domshell_back / domshell_forward (faster than re-navigating, uses browser cache)
 - Listing/switching tabs: use domshell_tabs, then domshell_cd with "~/tabs/<id>"
+- Closing tabs: domshell_close to clean up after extraction
 - Reading page content: domshell_text for bulk text, domshell_cat for element metadata, domshell_tree for structure
+- Visual inspection: domshell_screenshot to see the page layout (great for unfamiliar sites)
 - Finding elements: domshell_find (deep recursive) or domshell_grep (current directory)
 - Getting URLs/hrefs: domshell_cat on a link shows its URL, or domshell_find with --meta --type link
 - Scrolling to see more content: domshell_scroll down/up, or scroll a specific element into view
 - Complex DOM queries: domshell_js for CSS selectors, batch extraction, or computed values
-- Interacting: domshell_click, domshell_focus, domshell_type
+- Interacting: domshell_click, domshell_focus, domshell_type, domshell_select (dropdowns)
+- Waiting for dynamic content: domshell_wait to poll for elements on SPA/AJAX pages
 
 TYPICAL WORKFLOW:
 1. Enter a tab: domshell_here (focused tab), domshell_cd with "%here%" (composable), or domshell_open (new tab)
-2. Understand structure: domshell_tree (overview), domshell_ls (children)
+2. Understand structure: domshell_screenshot (visual overview), domshell_tree (AX structure), domshell_ls (children)
 3. Extract content: domshell_text (bulk text — much faster than multiple cat calls)
 4. Find specific elements: domshell_find with pattern or --type (e.g. --type link, --type button)
 5. Scroll to reach content: domshell_scroll down (page) or domshell_scroll with target (element into view)
 6. Inspect element details: domshell_cat shows full metadata — AX role, DOM tag, href/src/id/class, text, outerHTML
-7. Interact: domshell_click, domshell_focus + domshell_type
+7. Interact: domshell_click, domshell_focus + domshell_type, domshell_select (dropdowns)
 8. Advanced extraction: domshell_js for batch DOM queries (e.g. extract all comments in one call via CSS selectors)
+9. Navigate back: domshell_back to return to previous page (faster than re-navigating, preserves browser history)
+10. Clean up: domshell_close to close tabs when done extracting
 
 BROWSER HIERARCHY:
 - "~" or "/" = browser root. "ls" shows windows/ and tabs/.
@@ -325,6 +331,10 @@ IMPORTANT TIPS:
 - Use domshell_scroll with a target element name to jump directly to a section (e.g. scroll see_also_heading).
 - Use domshell_js to batch complex extractions into a single call — e.g. extract all comments, all table rows, or all links matching a CSS selector.
 - Prefer domshell_text/domshell_find for simple extraction (more structured). Use domshell_js when you need CSS selectors or would otherwise need 3+ calls.
+- Use domshell_back instead of domshell_navigate to return to a previous page — it's faster (browser cache) and doesn't require remembering the URL.
+- Use domshell_screenshot on unfamiliar pages to see the layout before starting extraction — one visual can replace multiple exploration calls.
+- Use domshell_wait after clicks/navigation that trigger async content loading (SPAs, AJAX) instead of retry loops with refresh + find.
+- Use domshell_select for <select> dropdowns instead of js-based workarounds.
 - The AXTree auto-refreshes after clicks/navigation — no manual refresh needed.
 
 EFFICIENT PATTERNS:
@@ -337,6 +347,9 @@ EFFICIENT PATTERNS:
 7. Sibling Navigation: find --type heading "section" → cd container → ls --after section_heading -n 5 --text (elements after a heading). Combines with --type: ls --after intro --type link --meta.
 8. Below-the-fold Content: scroll down → ls --text (see what's visible). For known targets: find --type heading → scroll target_heading → text nearby_content. Returns position as percentage for orientation.
 9. Batch Extraction with JS: js [...document.querySelectorAll('.item')].map(el => ({title: el.querySelector('a').textContent, url: el.querySelector('a').href})) — one call replaces multiple find + cat calls. Use for repetitive extraction patterns.
+10. Multi-page Navigation: open page1 → extract → navigate page2 → extract → back (returns to page1 via browser history). Use back instead of re-navigating — it's faster and preserves scroll position.
+11. Visual-first Exploration: screenshot (see layout) → js (targeted extraction based on what you see). Replaces tree → ls → find exploration on unfamiliar sites.
+12. Dynamic Content: click button → wait results_list → text results_list. Use wait instead of refresh + find retry loops.
 
 COMMAND CHAINING (grep is the linchpin):
 grep discovers sections and elements by name, giving you paths for subsequent commands. Chain pattern: grep (locate) → cd (scope) → extract (read/find/text). Examples:
@@ -369,6 +382,10 @@ ANTI-PATTERNS (avoid these):
 - Do NOT make multiple cat calls for content — use text for bulk content, find --meta for properties
 - Do NOT cd into a leaf element (links, buttons) — use cat element_name or text element_name instead
 - Do NOT repeatedly ls --offset to find content far down the page — use scroll down + ls --text, or find the target element and scroll it into view
+- Do NOT use navigate to return to a previous page — use back instead (browser cache makes it instant, no URL tracking needed)
+- Do NOT use multiple ls/find calls to understand an unfamiliar page layout — use screenshot first for instant visual orientation, then targeted extraction
+- Do NOT poll with repeated find calls for dynamic content — use wait <pattern> to block until the element appears
+- Do NOT use js to set dropdown values — use select <name> <value> for proper event dispatch
 
 Note: Use --no-confirm when starting the server to skip interactive confirmation prompts for write actions.`;
 
@@ -657,6 +674,79 @@ function createMcpServer(): McpServer {
       async ({ input, value, submit_button }) => {
         let cmd = `submit ${input} ${value}`;
         if (submit_button) cmd += ` --submit ${submit_button}`;
+        return { content: [{ type: "text", text: await executeWithSecurity(cmd) }] };
+      }
+    );
+
+    server.tool(
+      "domshell_back",
+      "Navigate back in browser history. Equivalent to the browser back button. Automatically refreshes the AX tree after navigation. Use this instead of domshell_navigate when returning to a previously visited page — it's faster (uses browser cache) and doesn't require remembering the URL.",
+      {},
+      async () => ({
+        content: [{ type: "text", text: await executeWithSecurity("back") }],
+      })
+    );
+
+    server.tool(
+      "domshell_forward",
+      "Navigate forward in browser history. Only works after a 'back' command. Automatically refreshes the AX tree after navigation.",
+      {},
+      async () => ({
+        content: [{ type: "text", text: await executeWithSecurity("forward") }],
+      })
+    );
+
+    server.tool(
+      "domshell_close",
+      "Close a tab. With no arguments, closes the current tab and returns to browser root. With a tab ID, closes that specific tab. Use after extracting data from a page to keep the tab count manageable.",
+      {
+        tabId: z.string().optional().describe("Tab ID to close (default: current tab)"),
+      },
+      async ({ tabId }) => ({
+        content: [{ type: "text", text: await executeWithSecurity(`close ${tabId ?? ""}`.trim()) }],
+      })
+    );
+
+    server.tool(
+      "domshell_select",
+      "Select an option from a <select> dropdown element. Matches by option value first, then by visible text (case-insensitive). Dispatches change and input events to trigger form updates.\n\nExamples:\n  select language_dropdown en\n  select country_select United States",
+      {
+        name: z.string().describe("Name or path of the <select> element"),
+        value: z.string().describe("Option value or visible text to select"),
+      },
+      async ({ name, value }) => ({
+        content: [{ type: "text", text: await executeWithSecurity(`select ${name} ${value}`) }],
+      })
+    );
+
+    server.tool(
+      "domshell_screenshot",
+      "Capture a PNG screenshot of the current tab. Returns the image for visual inspection. Useful for understanding page layout on unfamiliar sites — one screenshot can replace multiple exploration calls (tree, ls, find) by showing you exactly what the page looks like.",
+      {},
+      async () => {
+        const result = await executeWithSecurity("screenshot");
+        if (result.startsWith("__SCREENSHOT_BASE64__")) {
+          const base64 = result.slice("__SCREENSHOT_BASE64__".length);
+          return {
+            content: [{ type: "image", data: base64, mimeType: "image/png" }],
+          };
+        }
+        return { content: [{ type: "text", text: result }] };
+      }
+    );
+
+    server.tool(
+      "domshell_wait",
+      "Wait for an element to appear in the AX tree. Polls the tree every 500ms until the element is found or timeout is reached. Use after clicks or navigation that trigger async content loading (SPAs, AJAX).\n\nExamples:\n  wait results_list                    Wait for search results\n  wait submit_btn --type button         Wait for a button to appear\n  wait loading_spinner --timeout 10     Wait up to 10 seconds",
+      {
+        pattern: z.string().describe("Pattern to match against element names (case-insensitive)"),
+        type: z.string().optional().describe("Filter by AX role (e.g. 'button', 'link', 'heading')"),
+        timeout: z.number().optional().describe("Timeout in seconds (default: 5, max: 30)"),
+      },
+      async ({ pattern, type, timeout }) => {
+        let cmd = `wait ${pattern}`;
+        if (type) cmd += ` --type ${type}`;
+        if (timeout) cmd += ` --timeout ${timeout}`;
         return { content: [{ type: "text", text: await executeWithSecurity(cmd) }] };
       }
     );

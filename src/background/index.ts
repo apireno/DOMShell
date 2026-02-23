@@ -670,6 +670,80 @@ const COMMAND_HELP: Record<string, string> = {
     "  js fetch('/api/data').then(r => r.json())",
   ].join("\r\n"),
 
+  back: [
+    "\x1b[1;36mback\x1b[0m \u2014 Navigate back in browser history",
+    "",
+    "\x1b[33mUsage:\x1b[0m back",
+    "",
+    "Goes to the previous page in the tab's browser history.",
+    "Equivalent to clicking the browser back button.",
+    "Automatically refreshes the AX tree after navigation.",
+    "",
+    "\x1b[33mExample:\x1b[0m",
+    "  open wikipedia.org/wiki/AI → navigate to ML → back (returns to AI)",
+  ].join("\r\n"),
+
+  forward: [
+    "\x1b[1;36mforward\x1b[0m \u2014 Navigate forward in browser history",
+    "",
+    "\x1b[33mUsage:\x1b[0m forward",
+    "",
+    "Goes to the next page in the tab's browser history.",
+    "Only works after a 'back' command.",
+  ].join("\r\n"),
+
+  close: [
+    "\x1b[1;36mclose\x1b[0m \u2014 Close a tab",
+    "",
+    "\x1b[33mUsage:\x1b[0m close [tab-id]",
+    "",
+    "Closes the current tab (no args) or a specific tab by ID.",
+    "After closing, returns to the browser root.",
+    "",
+    "\x1b[33mExamples:\x1b[0m",
+    "  close           Close the current tab",
+    "  close 12345     Close tab with ID 12345",
+  ].join("\r\n"),
+
+  screenshot: [
+    "\x1b[1;36mscreenshot\x1b[0m \u2014 Capture a screenshot of the current tab",
+    "",
+    "\x1b[33mUsage:\x1b[0m screenshot",
+    "",
+    "Captures a PNG screenshot of the visible tab content.",
+    "Returns the image for visual inspection.",
+    "Useful for understanding page layout on unfamiliar sites.",
+  ].join("\r\n"),
+
+  select: [
+    "\x1b[1;36mselect\x1b[0m \u2014 Select an option from a <select> dropdown",
+    "",
+    "\x1b[33mUsage:\x1b[0m select <name> <value>",
+    "",
+    "Selects an option from a dropdown by value or visible text.",
+    "Matches by value attribute first, then by option text (case-insensitive).",
+    "Dispatches change and input events to trigger form updates.",
+    "",
+    "\x1b[33mExamples:\x1b[0m",
+    "  select language_select en           Select by value",
+    "  select country_dropdown United States   Select by text",
+  ].join("\r\n"),
+
+  wait: [
+    "\x1b[1;36mwait\x1b[0m \u2014 Wait for an element to appear in the AX tree",
+    "",
+    "\x1b[33mUsage:\x1b[0m wait <pattern> [--type role] [--timeout N]",
+    "",
+    "Polls the AX tree until an element matching the pattern appears.",
+    "Default timeout: 5 seconds. Maximum: 30 seconds.",
+    "Useful after clicks or navigation that trigger async content loading.",
+    "",
+    "\x1b[33mExamples:\x1b[0m",
+    "  wait results                        Wait for 'results' to appear",
+    "  wait submit_btn --type button        Wait for a specific button",
+    "  wait loading --timeout 10            Wait up to 10 seconds",
+  ].join("\r\n"),
+
   type: [
     "\x1b[1;36mtype\x1b[0m \u2014 Type text into the focused element",
     "",
@@ -1077,6 +1151,18 @@ async function executeCommand(raw: string): Promise<string> {
         return await handleFocus(args);
       case "scroll":
         return await handleScroll(args);
+      case "back":
+        return await handleBack();
+      case "forward":
+        return await handleForward();
+      case "close":
+        return await handleClose(args);
+      case "screenshot":
+        return await handleScreenshot();
+      case "select":
+        return await handleSelect(args);
+      case "wait":
+        return await handleWait(args);
       case "submit":
         return await handleSubmit(args);
       case "extract_links":
@@ -1156,43 +1242,59 @@ function handleHelp(): string {
     "Use \x1b[33m<command> --help\x1b[0m for detailed usage of any command.",
     "",
     "\x1b[1;33mBrowser:\x1b[0m",
-    "  \x1b[32mtabs\x1b[0m            List all open browser tabs",
-    "  \x1b[32mwindows\x1b[0m         List all browser windows with their tabs",
-    "  \x1b[32mhere\x1b[0m            Jump to the active tab in the focused window",
-    "  \x1b[32mcd tabs/<id>\x1b[0m    Enter a tab (by ID or name pattern)",
-    "  \x1b[32mcd %here%\x1b[0m       Enter the focused tab (composable: %here%/.., %here%/main)",
-    "  \x1b[32mcd ~\x1b[0m or \x1b[32mcd /\x1b[0m    Go to browser root",
+    "  \x1b[32mtabs\x1b[0m               List all open browser tabs",
+    "  \x1b[32mwindows\x1b[0m            List all browser windows with their tabs",
+    "  \x1b[32mhere\x1b[0m               Jump to the active tab in the focused window",
+    "  \x1b[32mcd tabs/<id>\x1b[0m       Enter a tab (by ID or name pattern)",
+    "  \x1b[32mcd %here%\x1b[0m          Enter the focused tab (composable: %here%/.., %here%/main)",
+    "  \x1b[32mcd ~\x1b[0m or \x1b[32mcd /\x1b[0m       Go to browser root",
     "",
     "\x1b[1;33mNavigation:\x1b[0m",
-    "  \x1b[32mnavigate <url>\x1b[0m  Navigate the current tab to a URL",
-    "  \x1b[32mopen <url>\x1b[0m      Open a new tab and enter it",
-    "  \x1b[32mrefresh\x1b[0m         Re-fetch the Accessibility Tree",
-    "  \x1b[32mls\x1b[0m              List children (tabs/windows at ~ or DOM elements)",
-    "  \x1b[32mcd <name>\x1b[0m       Enter a child node",
-    "  \x1b[32mpwd\x1b[0m             Show current path",
-    "  \x1b[32mtree [depth]\x1b[0m    Show tree view of current node",
+    "  \x1b[32mnavigate <url>\x1b[0m     Navigate the current tab to a URL",
+    "  \x1b[32mopen <url>\x1b[0m         Open a new tab and enter it",
+    "  \x1b[32mback\x1b[0m               Go back in browser history",
+    "  \x1b[32mforward\x1b[0m            Go forward in browser history",
+    "  \x1b[32mclose [tab-id]\x1b[0m     Close the current tab or a specific tab",
+    "  \x1b[32mrefresh\x1b[0m            Re-fetch the Accessibility Tree",
+    "  \x1b[32mscroll down|up [N]\x1b[0m  Scroll page or \x1b[32mscroll <name>\x1b[0m to scroll element into view",
+    "  \x1b[32mls\x1b[0m                 List children (\x1b[90m--meta --text --type --after\x1b[0m)",
+    "  \x1b[32mcd <name>\x1b[0m          Enter a child node",
+    "  \x1b[32mpwd\x1b[0m                Show current path",
+    "  \x1b[32mtree [depth]\x1b[0m       Show tree view of current node",
     "",
     "\x1b[1;33mInspection:\x1b[0m",
-    "  \x1b[32mcat <name>\x1b[0m      Read metadata and text content of a node",
-    "  \x1b[32mtext [name]\x1b[0m     Bulk extract text from a node and descendants",
-    "  \x1b[32mgrep <pattern>\x1b[0m  Search children for matching names",
-    "  \x1b[32mfind <pattern>\x1b[0m  Deep recursive search across the tree",
+    "  \x1b[32mcat <name>\x1b[0m         Read metadata and text content of a node",
+    "  \x1b[32mtext [name]\x1b[0m        Bulk extract text (\x1b[90m--links\x1b[0m for inline URLs)",
+    "  \x1b[32mread [name]\x1b[0m        Structured subtree extraction (\x1b[90m--meta --text\x1b[0m)",
+    "  \x1b[32mgrep <pattern>\x1b[0m     Search children for matching names (\x1b[90m-r\x1b[0m for recursive)",
+    "  \x1b[32mfind <pattern>\x1b[0m     Deep recursive search (\x1b[90m--type --meta --text\x1b[0m)",
+    "  \x1b[32mextract_links\x1b[0m      Extract all links as [text](url) format",
+    "  \x1b[32mextract_table\x1b[0m      Extract a table as markdown or CSV",
+    "  \x1b[32mscreenshot\x1b[0m         Capture a screenshot of the current tab",
+    "  \x1b[32mwait <pattern>\x1b[0m     Wait for an element to appear (\x1b[90m--timeout N\x1b[0m)",
     "",
     "\x1b[1;33mInteraction:\x1b[0m",
-    "  \x1b[32mclick <name>\x1b[0m    Click an element",
-    "  \x1b[32mfocus <name>\x1b[0m    Focus an input element",
-    "  \x1b[32mtype <text>\x1b[0m     Type text into the focused element",
+    "  \x1b[32mclick <name>\x1b[0m       Click an element",
+    "  \x1b[32mfocus <name>\x1b[0m       Focus an input element",
+    "  \x1b[32mtype <text>\x1b[0m        Type text into the focused element",
+    "  \x1b[32msubmit <input> <val>\x1b[0m  Atomic form fill + submit",
+    "  \x1b[32mselect <name> <val>\x1b[0m   Select an option from a dropdown",
+    "  \x1b[32mjs <code>\x1b[0m          Execute JavaScript in the tab context",
+    "",
+    "\x1b[1;33mPipes:\x1b[0m",
+    "  \x1b[32mfind --type link --meta | grep github\x1b[0m   Filter output with grep",
+    "  \x1b[32mls --text | head -n 5\x1b[0m                  Limit output lines",
     "",
     "\x1b[1;33mSystem:\x1b[0m",
-    "  \x1b[32mwhoami\x1b[0m          Check authentication cookies",
-    "  \x1b[32menv\x1b[0m             Show environment variables",
-    "  \x1b[32mexport K=V\x1b[0m      Set an environment variable",
-    "  \x1b[32mdebug\x1b[0m           Inspect raw AX tree data",
-    "  \x1b[32mclear\x1b[0m           Clear the terminal",
+    "  \x1b[32mwhoami\x1b[0m             Check authentication cookies",
+    "  \x1b[32menv\x1b[0m                Show environment variables",
+    "  \x1b[32mexport K=V\x1b[0m         Set an environment variable",
+    "  \x1b[32mdebug\x1b[0m              Inspect raw AX tree data",
+    "  \x1b[32mclear\x1b[0m              Clear the terminal",
     "",
     "\x1b[1;33mMCP Bridge:\x1b[0m",
-    "  \x1b[32mconnect <token>\x1b[0m Connect to an MCP server (WebSocket)",
-    "  \x1b[32mdisconnect\x1b[0m      Disconnect from the MCP server",
+    "  \x1b[32mconnect <token>\x1b[0m    Connect to an MCP server (WebSocket)",
+    "  \x1b[32mdisconnect\x1b[0m         Disconnect from the MCP server",
     "",
     "\x1b[90mType prefixes: [d]=directory [x]=interactive [-]=static\x1b[0m",
     "",
@@ -2091,6 +2193,216 @@ async function handleJs(rawCode: string): Promise<string> {
   }
 
   return output;
+}
+
+// ---- back / forward ----
+
+async function handleBack(): Promise<string> {
+  ensureInsideTab();
+
+  const url = await cdp.goBack();
+  if (!url) {
+    return "\x1b[33mNo previous page in history.\x1b[0m";
+  }
+
+  // Wait for page to load after history navigation
+  const tabId = state.activeTabId!;
+  await new Promise<void>((resolve) => {
+    const listener = (id: number, info: { status?: string }) => {
+      if (id === tabId && info.status === "complete") {
+        chrome.tabs.onUpdated.removeListener(listener);
+        resolve();
+      }
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+    setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve();
+    }, 10000);
+  });
+
+  // Re-fetch the AX tree
+  const { nodeCount } = await cdpSwitchToTab(tabId);
+
+  // Reset DOM portion of path
+  const domStart = getDomStartIndex(state.path);
+  if (domStart >= 0) {
+    state.path = state.path.slice(0, domStart);
+  }
+
+  const tab = await chrome.tabs.get(tabId);
+  return [
+    `\x1b[32m\u2713 Back\x1b[0m`,
+    `  \x1b[37mURL:   ${tab.url ?? url}\x1b[0m`,
+    `  \x1b[37mTitle: ${tab.title ?? "unknown"}\x1b[0m`,
+    `  \x1b[90mAX Nodes: ${nodeCount}\x1b[0m`,
+    "",
+  ].join("\r\n");
+}
+
+async function handleForward(): Promise<string> {
+  ensureInsideTab();
+
+  const url = await cdp.goForward();
+  if (!url) {
+    return "\x1b[33mNo forward page in history.\x1b[0m";
+  }
+
+  const tabId = state.activeTabId!;
+  await new Promise<void>((resolve) => {
+    const listener = (id: number, info: { status?: string }) => {
+      if (id === tabId && info.status === "complete") {
+        chrome.tabs.onUpdated.removeListener(listener);
+        resolve();
+      }
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+    setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve();
+    }, 10000);
+  });
+
+  const { nodeCount } = await cdpSwitchToTab(tabId);
+
+  const domStart = getDomStartIndex(state.path);
+  if (domStart >= 0) {
+    state.path = state.path.slice(0, domStart);
+  }
+
+  const tab = await chrome.tabs.get(tabId);
+  return [
+    `\x1b[32m\u2713 Forward\x1b[0m`,
+    `  \x1b[37mURL:   ${tab.url ?? url}\x1b[0m`,
+    `  \x1b[37mTitle: ${tab.title ?? "unknown"}\x1b[0m`,
+    `  \x1b[90mAX Nodes: ${nodeCount}\x1b[0m`,
+    "",
+  ].join("\r\n");
+}
+
+// ---- close ----
+
+async function handleClose(args: string[]): Promise<string> {
+  const pa = parseArgs(args);
+
+  let tabId: number;
+  if (pa.positional.length > 0) {
+    tabId = parseInt(pa.positional[0], 10);
+    if (isNaN(tabId)) {
+      return `\x1b[31mclose: invalid tab ID: ${pa.positional[0]}\x1b[0m`;
+    }
+  } else {
+    if (state.activeTabId === null) {
+      return "\x1b[31mclose: not in a tab. Use 'close <tab-id>' or cd into a tab first.\x1b[0m";
+    }
+    tabId = state.activeTabId;
+  }
+
+  // Detach CDP if closing the attached tab
+  if (state.activeTabId === tabId) {
+    await cdp.detach();
+    state.activeTabId = null;
+    state.path = [];
+    state.axNodeIds = [];
+    nodeMap = new Map();
+  }
+
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  const title = tab?.title ?? `tab ${tabId}`;
+
+  await chrome.tabs.remove(tabId);
+
+  return `\x1b[32m\u2713 Closed: ${title}\x1b[0m`;
+}
+
+// ---- screenshot ----
+
+async function handleScreenshot(): Promise<string> {
+  ensureInsideTab();
+
+  const data = await cdp.captureScreenshot("png");
+  // Return base64 data prefixed with marker for MCP to detect
+  return `__SCREENSHOT_BASE64__${data}`;
+}
+
+// ---- select ----
+
+async function handleSelect(args: string[]): Promise<string> {
+  ensureInsideTab();
+  await ensureFreshTree();
+
+  if (args.length < 2) {
+    return "\x1b[31mUsage: select <name> <value> (see select --help)\x1b[0m";
+  }
+
+  const targetName = args[0];
+  const value = args.slice(1).join(" ");
+  const currentId = getCurrentNodeId();
+  const match = resolveByPath(currentId, targetName, nodeMap);
+
+  if (!match) {
+    return `\x1b[31mselect: ${targetName}: No such element\x1b[0m`;
+  }
+
+  if (!match.backendDOMNodeId) {
+    return `\x1b[31mselect: ${targetName}: No DOM node backing\x1b[0m`;
+  }
+
+  const result = await cdp.selectOption(match.backendDOMNodeId, value);
+
+  if (result.startsWith("Error:")) {
+    return `\x1b[31mselect: ${result}\x1b[0m`;
+  }
+
+  return `\x1b[32m\u2713 ${result}\x1b[0m`;
+}
+
+// ---- wait ----
+
+async function handleWait(args: string[]): Promise<string> {
+  ensureInsideTab();
+
+  const pa = parseArgs(args);
+  const pattern = pa.positional[0];
+  if (!pattern) {
+    return "\x1b[31mUsage: wait <pattern> [--type role] [--timeout N] (see wait --help)\x1b[0m";
+  }
+
+  const typeFilter = pa.named["--type"]?.toLowerCase();
+  const timeoutSec = pa.named["--timeout"] ? parseFloat(pa.named["--timeout"]) : 5;
+  const maxMs = Math.min(timeoutSec * 1000, 30000);
+  const interval = 500;
+  const start = Date.now();
+  const expandedTypes = typeFilter ? expandTypeFilter(typeFilter) : undefined;
+
+  while (Date.now() - start < maxMs) {
+    // Force refresh the AX tree each poll
+    const axNodes = await cdp.getAllFrameAXTrees();
+    nodeMap = buildNodeMap(axNodes);
+
+    // Search for matching element
+    const currentId = getCurrentNodeId();
+    const results: Array<{ path: string; node: VFSNode }> = [];
+    await findRecursive(currentId, "", pattern.toLowerCase(), expandedTypes, results, new Set(), 1, false);
+
+    if (results.length > 0) {
+      const found = results[0];
+      const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+      const tp = typePrefix(found.node);
+      const coloredName = found.node.isDirectory
+        ? `\x1b[1;34m${found.node.name}/\x1b[0m`
+        : formatColoredName(found.node);
+      return [
+        `\x1b[32m\u2713 Found after ${elapsed}s\x1b[0m`,
+        `  ${tp} \x1b[90m${found.path}\x1b[0m${coloredName} \x1b[90m(${found.node.role})\x1b[0m`,
+      ].join("\r\n");
+    }
+
+    // Wait before next poll
+    await new Promise((resolve) => setTimeout(resolve, interval));
+  }
+
+  return `\x1b[31mwait: timed out after ${timeoutSec}s — "${pattern}" not found\x1b[0m`;
 }
 
 // ---- type ----

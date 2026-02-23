@@ -587,6 +587,9 @@ Options:
 | `cd ~/windows/<id>` | Browse a window's tabs |
 | `navigate <url>` | Navigate the current tab to a URL |
 | `open <url>` | Open a URL in a new tab and enter it |
+| `back` | Go back in browser history (like the back button) |
+| `forward` | Go forward in browser history |
+| `close [tab-id]` | Close the current tab (or a specific tab by ID) |
 
 ### DOM Tree
 
@@ -610,6 +613,9 @@ Options:
 | `scroll [down\|up] [N]` | Scroll page by N viewport heights (default: 1). Returns scroll position %. |
 | `scroll <name>` | Scroll a specific element into the center of the viewport |
 | `js <code>` | Execute JavaScript in the tab context. Returns JSON-serialized result. Supports async/await. |
+| `screenshot` | Capture a PNG screenshot of the current tab (returns image via MCP, base64 in shell) |
+| `select <name> <value>` | Select a dropdown option by value or visible text (dispatches change/input events) |
+| `wait <pattern> [--type ROLE] [--timeout N]` | Wait for an element matching pattern to appear (polls AX tree, default 5s timeout, max 30s) |
 | `refresh` | Force re-fetch the Accessibility Tree |
 
 ### System
@@ -890,9 +896,9 @@ The MCP server is hardened with multiple layers of security. **By default, it's 
 
 | Tier | Commands | Default | Enable With |
 |------|----------|---------|-------------|
-| **Read** | `ls`, `cd`, `pwd`, `cat`, `text`, `grep`, `find`, `tree`, `refresh`, `tabs`, `windows`, `here` | Enabled | *(always on)* |
-| **Navigate** | `navigate`, `goto`, `open` | **Disabled** | `--allow-write` |
-| **Write** | `click`, `focus`, `type`, `scroll`, `js` | **Disabled** | `--allow-write` |
+| **Read** | `ls`, `cd`, `pwd`, `cat`, `text`, `grep`, `find`, `tree`, `refresh`, `tabs`, `windows`, `here`, `screenshot`, `wait` | Enabled | *(always on)* |
+| **Navigate** | `navigate`, `goto`, `open`, `back`, `forward` | **Disabled** | `--allow-write` |
+| **Write** | `click`, `focus`, `type`, `scroll`, `js`, `select`, `close` | **Disabled** | `--allow-write` |
 | **Sensitive** | `whoami` (exposes cookies) | **Disabled** | `--allow-sensitive` |
 
 The **Navigate** tier is separate from Write because navigation is equivalent to typing a URL — it requires `--allow-write` but skips the interactive confirmation prompt. This is important for Claude Desktop where `/dev/tty` is unavailable.
@@ -901,7 +907,7 @@ The **Navigate** tier is separate from Write because navigation is equivalent to
 
 | Flag | Description |
 |------|-------------|
-| `--allow-write` | Enable click/focus/type/scroll/js commands |
+| `--allow-write` | Enable click/focus/type/scroll/js/select/close/navigate/back/forward commands |
 | `--allow-sensitive` | Enable whoami (cookie access) |
 | `--allow-all` | Shorthand for both |
 | `--no-confirm` | Skip user confirmation for write actions (use with caution) |
@@ -983,6 +989,12 @@ dom@shell:$ disconnect
 | `domshell_js` | `js <code>` (arbitrary JavaScript execution) | Write |
 | `domshell_type` | `type <text>` | Write |
 | `domshell_submit` | `submit <input> <value> [--submit btn]` (atomic form fill) | Write |
+| `domshell_back` | `back` (browser history back) | Navigate |
+| `domshell_forward` | `forward` (browser history forward) | Navigate |
+| `domshell_close` | `close [tab-id]` (close a tab) | Write |
+| `domshell_screenshot` | `screenshot` (capture tab as PNG image) | Read |
+| `domshell_select` | `select <name> <value>` (dropdown selection) | Write |
+| `domshell_wait` | `wait <pattern> [--type ROLE] [--timeout N]` (wait for element) | Read |
 | `domshell_whoami` | `whoami` | Sensitive |
 | `domshell_execute` | *(any command)* | Varies |
 
@@ -999,13 +1011,13 @@ dom@shell:$ disconnect
 
 - [ ] **`watch` / `cron`** — periodic re-execution of a command (e.g. `watch ls` to poll for DOM changes, `cron "5s" "text main"` to sample content)
 - [ ] **`history`** — command history with recall (`history`, `!n` to re-run)
-- [ ] **`back` / `forward`** — browser-style history navigation within the current tab
-- [ ] **`close`** — close the current tab (`close` or `close <tab-id>`)
-- [ ] **`screenshot`** — capture a screenshot of the current tab (useful for visual verification alongside AX tree inspection)
+- [x] **`back` / `forward`** — browser-style history navigation within the current tab
+- [x] **`close`** — close the current tab (`close` or `close <tab-id>`)
+- [x] **`screenshot`** — capture a screenshot of the current tab (useful for visual verification alongside AX tree inspection)
 - [x] **`pipe` / `|`** — pipe output between commands (e.g. `find --type link | grep login`)
-- [ ] **`select <name>`** — select an option from a `<select>` dropdown by value or visible text
+- [x] **`select <name>`** — select an option from a `<select>` dropdown by value or visible text
 - [x] **`scroll`** — scroll the page or a specific element (`scroll down`, `scroll up`, `scroll <name>`)
-- [ ] **`wait`** — wait for a specific element to appear (e.g. `wait submit_btn` blocks until it exists in the tree)
+- [x] **`wait`** — wait for a specific element to appear (e.g. `wait submit_btn` blocks until it exists in the tree)
 - [ ] **`for` loop** — iterate over elements (e.g. `for item in $(find --type link); do cat $item; done`) — basic shell-style looping for batch operations
 - [ ] **`.sh` scripts** — save and execute multi-command shell scripts (e.g. `run scrape.sh`) for repeatable workflows
 

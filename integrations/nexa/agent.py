@@ -46,12 +46,15 @@ READ_TOOLS = {
     "domshell_pwd", "domshell_cat", "domshell_text", "domshell_read",
     "domshell_find", "domshell_grep", "domshell_tree",
     "domshell_extract_links", "domshell_extract_table",
-    "domshell_refresh", "domshell_execute",
+    "domshell_refresh", "domshell_screenshot", "domshell_wait",
+    "domshell_execute",
 }
 
 WRITE_TOOLS = {
     "domshell_click", "domshell_focus", "domshell_type",
     "domshell_navigate", "domshell_open", "domshell_submit",
+    "domshell_back", "domshell_forward", "domshell_close",
+    "domshell_select",
 }
 
 # Abbreviated tool names that models might output → canonical MCP name
@@ -64,7 +67,10 @@ TOOL_ALIASES = {
     "open": "domshell_open", "tabs": "domshell_tabs", "here": "domshell_here",
     "refresh": "domshell_refresh", "extract_links": "domshell_extract_links",
     "extract_table": "domshell_extract_table", "execute": "domshell_execute",
-    "whoami": "domshell_whoami",
+    "whoami": "domshell_whoami", "back": "domshell_back",
+    "forward": "domshell_forward", "close": "domshell_close",
+    "screenshot": "domshell_screenshot", "select": "domshell_select",
+    "wait": "domshell_wait",
 }
 
 # ---------------------------------------------------------------------------
@@ -82,17 +88,21 @@ EXAMPLE CALLS:
 {"name": "domshell_execute", "arguments": {"command": "text"}}
 {"name": "domshell_execute", "arguments": {"command": "find --type heading"}}
 
-COMMANDS: tabs, open <url>, navigate <url>, cd <path>, ls, find [pattern], \
-find --type TYPE (accepts aliases: input, dropdown, nav, toggle, modal, image, btn, etc.), \
+COMMANDS: tabs, open <url>, navigate <url>, back, forward, close, cd <path>, ls, \
+find [pattern], find --type TYPE (aliases: input, dropdown, nav, toggle, modal, image, btn, etc.), \
 grep <pattern>, text [name], text --links [name], cat <name>, extract_links, \
 extract_table <name>, click <name>, focus <name>, type <text>, submit <input> <value>, \
-scroll down [N], scroll up [N], scroll <element_name>, \
+select <name> <value>, scroll down [N], scroll up [N], scroll <element_name>, \
+screenshot, wait <pattern> [--timeout N], \
 js <code> (execute JavaScript in tab, returns result)
 
 WORKFLOW: tabs → open URL → cd section → text to read content.
 Use "text --links <name>" to get text with link URLs inline as [text](url).
 Use "scroll down" to see below-the-fold content, "scroll element_name" to jump to a section.
 Use "js <code>" for batch DOM queries (e.g. extract all items with CSS selectors in one call).
+Use "back" to return to previous page (faster than navigate, uses browser cache).
+Use "screenshot" on unfamiliar pages — see the layout instantly, then extract with js or text.
+Use "wait <pattern>" for dynamic content that loads after actions.
 
 When done, respond in plain text (no JSON)."""
 
@@ -104,13 +114,16 @@ like submit_btn, search_input, login_link).
 
 TYPICAL WORKFLOW:
 1. Enter a tab: use domshell_open (new tab) or domshell_here (focused tab)
-2. Understand structure: domshell_tree (overview), domshell_ls (children)
+2. Understand structure: domshell_tree (overview), domshell_ls (children), or screenshot for instant visual orientation
 3. Extract content: domshell_text (bulk text — much faster than multiple cat calls)
 4. Find specific elements: domshell_find with pattern or --type (exact roles OR aliases: input, dropdown, nav, toggle, modal, image, btn, anchor, sidebar, header, footer, searchbar)
 5. Scroll to reach content: domshell_scroll down (page) or domshell_scroll with target (element into view)
 6. Inspect details: domshell_cat shows full metadata — AX role, DOM tag, href, src, id, class, outerHTML
-7. Interact: domshell_click, domshell_focus + domshell_type, or domshell_submit (atomic form fill)
+7. Interact: domshell_click, domshell_focus + domshell_type, domshell_submit (atomic form fill), or select (dropdowns)
 8. Advanced extraction: domshell_js for batch DOM queries via CSS selectors (one call replaces many)
+9. Navigate back: use back/forward for browser history — faster than navigate, uses browser cache
+10. Dynamic content: use wait <pattern> to block until an element appears after actions
+11. Tab cleanup: use close to close tabs when done with multi-tab workflows
 
 BROWSER HIERARCHY:
 - "~" or "/" = browser root. "ls" shows windows/ and tabs/.
@@ -125,10 +138,13 @@ EFFICIENT PATTERNS:
 4. Link Extraction: text --links section (gets text AND link URLs in one call)
 5. Section Discovery: grep "section_name" (recursive) — NOT ls pagination
 6. Sibling Navigation: ls --after heading_name -n 5 --text (elements after a heading)
-7. Form Interaction: domshell_submit for atomic fill, or focus → type → click
+7. Form Interaction: domshell_submit for atomic fill, or focus → type → click. select for dropdowns.
 8. Link URLs: find --type link --meta (shows href per link) OR text --links (inline in text)
 9. Below-the-fold: scroll down → ls --text. For known targets: find --type heading → scroll target → text
 10. Batch JS Extraction: js [...document.querySelectorAll('.item')].map(el => el.textContent) — one call for repetitive extraction
+11. Multi-page navigation: open → extract → back (browser cache, no URL tracking needed)
+12. Visual-first exploration: screenshot on unfamiliar pages → see layout → targeted js/text extraction
+13. Dynamic content: click/submit → wait <pattern> → extract (no manual polling)
 
 COMMAND CHAINING:
 grep discovers sections → cd scopes context → text/find/extract extracts content.
@@ -140,6 +156,9 @@ ANTI-PATTERNS:
 - Do NOT cd into an element just to read its text — use text element_name instead
 - Do NOT call text on individual rows — text the parent container instead
 - Do NOT make multiple cat calls for content — use text for bulk, find --meta for properties
+- Do NOT use navigate to go back — use back instead (instant, uses browser cache)
+- Do NOT use multiple ls/find to explore unfamiliar pages — use screenshot first
+- Do NOT poll with repeated find for dynamic content — use wait <pattern>
 
 When you have enough information to answer the user's question, respond in natural \
 language WITHOUT a function call. The conversation ends when you give a plain text answer."""

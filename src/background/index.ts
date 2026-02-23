@@ -653,6 +653,23 @@ const COMMAND_HELP: Record<string, string> = {
     "  find --type heading → scroll target_heading → text",
   ].join("\r\n"),
 
+  js: [
+    "\x1b[1;36mjs\x1b[0m \u2014 Execute JavaScript in the tab context",
+    "",
+    "\x1b[33mUsage:\x1b[0m js <expression>",
+    "",
+    "Evaluates arbitrary JavaScript in the current tab and returns the result.",
+    "Supports async/await (Promises are automatically awaited).",
+    "Results are JSON-serialized. Large results are truncated at 10000 chars.",
+    "",
+    "\x1b[33mExamples:\x1b[0m",
+    "  js document.title",
+    "  js document.querySelectorAll('a').length",
+    "  js [...document.querySelectorAll('h2')].map(h => h.textContent)",
+    "  js document.querySelector('.score').innerText",
+    "  js fetch('/api/data').then(r => r.json())",
+  ].join("\r\n"),
+
   type: [
     "\x1b[1;36mtype\x1b[0m \u2014 Type text into the focused element",
     "",
@@ -983,6 +1000,19 @@ function grepLines(output: string, pattern: string, limit: number): string {
 async function executeCommand(raw: string): Promise<string> {
   const trimmed = raw.trim();
   if (!trimmed) return "";
+
+  // Special case: 'js' command gets the raw code string — skip pipe splitting
+  // and argument parsing which would mangle JavaScript operators (|, ||) and
+  // string literals ('quotes', "quotes").
+  const spaceIdx = trimmed.indexOf(" ");
+  const firstWord = (spaceIdx === -1 ? trimmed : trimmed.slice(0, spaceIdx)).toLowerCase();
+  if (firstWord === "js") {
+    const rawCode = spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1);
+    if (rawCode.trim() === "--help") {
+      return COMMAND_HELP["js"] ?? "No help available for 'js'.";
+    }
+    return await handleJs(rawCode);
+  }
 
   // Pipe support: split on | and chain outputs
   const pipeSegments = splitOnPipe(trimmed);
@@ -2026,6 +2056,41 @@ async function handleScroll(args: string[]): Promise<string> {
   const maxScroll = info.scrollHeight - info.viewportHeight;
   const pct = maxScroll > 0 ? Math.round((info.scrollY / maxScroll) * 100) : 0;
   return `\x1b[32m\u2713 Scrolled ${direction} ${amount} viewport(s)\x1b[0m\r\n\x1b[90mPosition: ${info.scrollY}/${info.scrollHeight}px (${pct}%)\x1b[0m`;
+}
+
+// ---- js ----
+
+async function handleJs(rawCode: string): Promise<string> {
+  ensureInsideTab();
+
+  const code = rawCode.trim();
+  if (!code) {
+    return "\x1b[31mUsage: js <expression> (see js --help)\x1b[0m";
+  }
+
+  const { value, type } = await cdp.evaluateJs(code);
+
+  if (type === "undefined" || value === undefined) {
+    return "\x1b[90mundefined\x1b[0m";
+  }
+
+  let output: string;
+  if (typeof value === "string") {
+    output = value;
+  } else {
+    try {
+      output = JSON.stringify(value, null, 2);
+    } catch {
+      output = String(value);
+    }
+  }
+
+  // Truncate large results
+  if (output.length > 10000) {
+    output = output.slice(0, 10000) + `\n\x1b[33m... truncated (${output.length} chars total)\x1b[0m`;
+  }
+
+  return output;
 }
 
 // ---- type ----

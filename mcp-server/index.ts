@@ -54,7 +54,7 @@ function audit(entry: string): void {
 // ---- Command Tiers ----
 
 const NAVIGATE_COMMANDS = new Set(["navigate", "goto", "open"]);
-const WRITE_COMMANDS = new Set(["click", "focus", "type", "scroll"]);
+const WRITE_COMMANDS = new Set(["click", "focus", "type", "scroll", "js"]);
 const SENSITIVE_COMMANDS = new Set(["whoami"]);
 
 function getCommandTier(command: string): "read" | "navigate" | "write" | "sensitive" {
@@ -283,6 +283,7 @@ WHEN TO USE DOMSHELL (prefer over native browser tools):
 - Finding elements: domshell_find (deep recursive) or domshell_grep (current directory)
 - Getting URLs/hrefs: domshell_cat on a link shows its URL, or domshell_find with --meta --type link
 - Scrolling to see more content: domshell_scroll down/up, or scroll a specific element into view
+- Complex DOM queries: domshell_js for CSS selectors, batch extraction, or computed values
 - Interacting: domshell_click, domshell_focus, domshell_type
 
 TYPICAL WORKFLOW:
@@ -293,6 +294,7 @@ TYPICAL WORKFLOW:
 5. Scroll to reach content: domshell_scroll down (page) or domshell_scroll with target (element into view)
 6. Inspect element details: domshell_cat shows full metadata — AX role, DOM tag, href/src/id/class, text, outerHTML
 7. Interact: domshell_click, domshell_focus + domshell_type
+8. Advanced extraction: domshell_js for batch DOM queries (e.g. extract all comments in one call via CSS selectors)
 
 BROWSER HIERARCHY:
 - "~" or "/" = browser root. "ls" shows windows/ and tabs/.
@@ -321,6 +323,8 @@ IMPORTANT TIPS:
 - Directories (navigation/, main/) are containers you cd into. Files (submit_btn, logo_link) are leaf elements you cat or click.
 - Use domshell_scroll to reach below-the-fold content. Scroll returns position percentage so you know where you are on the page.
 - Use domshell_scroll with a target element name to jump directly to a section (e.g. scroll see_also_heading).
+- Use domshell_js to batch complex extractions into a single call — e.g. extract all comments, all table rows, or all links matching a CSS selector.
+- Prefer domshell_text/domshell_find for simple extraction (more structured). Use domshell_js when you need CSS selectors or would otherwise need 3+ calls.
 - The AXTree auto-refreshes after clicks/navigation — no manual refresh needed.
 
 EFFICIENT PATTERNS:
@@ -332,6 +336,7 @@ EFFICIENT PATTERNS:
 6. Path Resolution: All commands accept relative paths — text main/article/paragraph, cat nav/logo_link, click form/submit_btn. Saves cd round-trips.
 7. Sibling Navigation: find --type heading "section" → cd container → ls --after section_heading -n 5 --text (elements after a heading). Combines with --type: ls --after intro --type link --meta.
 8. Below-the-fold Content: scroll down → ls --text (see what's visible). For known targets: find --type heading → scroll target_heading → text nearby_content. Returns position as percentage for orientation.
+9. Batch Extraction with JS: js [...document.querySelectorAll('.item')].map(el => ({title: el.querySelector('a').textContent, url: el.querySelector('a').href})) — one call replaces multiple find + cat calls. Use for repetitive extraction patterns.
 
 COMMAND CHAINING (grep is the linchpin):
 grep discovers sections and elements by name, giving you paths for subsequent commands. Chain pattern: grep (locate) → cd (scope) → extract (read/find/text). Examples:
@@ -601,6 +606,17 @@ function createMcpServer(): McpServer {
         }
         return { content: [{ type: "text", text: await executeWithSecurity(cmd) }] };
       }
+    );
+
+    server.tool(
+      "domshell_js",
+      "Execute arbitrary JavaScript in the current tab and return the result. Use this for complex DOM queries, CSS selector extraction, or any operation that would take multiple DOMShell commands.\n\nThe code runs in the page context with full DOM access. Promises are automatically awaited. Results are JSON-serialized (truncated at 10000 chars).\n\nCommon patterns:\n  js document.title\n  js document.querySelectorAll('a').length\n  js [...document.querySelectorAll('.comment')].map(c => ({user: c.querySelector('.user').textContent, text: c.querySelector('.comment-text').textContent}))\n  js document.querySelector('table').outerHTML\n\nWhen to use js vs other tools:\n  - Use js when you need to batch multiple extractions into one call\n  - Use js for CSS selector queries that don't map cleanly to AX tree roles\n  - Use js for computed values (e.g. counting elements, filtering by attribute)\n  - Prefer domshell_text/domshell_find for simple content extraction (more structured output)",
+      {
+        code: z.string().describe("JavaScript code to evaluate in the tab context. Can be an expression or statement block. Async/await and Promises are supported."),
+      },
+      async ({ code }) => ({
+        content: [{ type: "text", text: await executeWithSecurity(`js ${code}`) }],
+      })
     );
 
     server.tool(

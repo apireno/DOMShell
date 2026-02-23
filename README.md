@@ -609,6 +609,7 @@ Options:
 | `submit <input> <val>` | Atomic form fill: focus + clear + type + submit (`--submit btn` or Enter) |
 | `scroll [down\|up] [N]` | Scroll page by N viewport heights (default: 1). Returns scroll position %. |
 | `scroll <name>` | Scroll a specific element into the center of the viewport |
+| `js <code>` | Execute JavaScript in the tab context. Returns JSON-serialized result. Supports async/await. |
 | `refresh` | Force re-fetch the Accessibility Tree |
 
 ### System
@@ -891,7 +892,7 @@ The MCP server is hardened with multiple layers of security. **By default, it's 
 |------|----------|---------|-------------|
 | **Read** | `ls`, `cd`, `pwd`, `cat`, `text`, `grep`, `find`, `tree`, `refresh`, `tabs`, `windows`, `here` | Enabled | *(always on)* |
 | **Navigate** | `navigate`, `goto`, `open` | **Disabled** | `--allow-write` |
-| **Write** | `click`, `focus`, `type`, `scroll` | **Disabled** | `--allow-write` |
+| **Write** | `click`, `focus`, `type`, `scroll`, `js` | **Disabled** | `--allow-write` |
 | **Sensitive** | `whoami` (exposes cookies) | **Disabled** | `--allow-sensitive` |
 
 The **Navigate** tier is separate from Write because navigation is equivalent to typing a URL — it requires `--allow-write` but skips the interactive confirmation prompt. This is important for Claude Desktop where `/dev/tty` is unavailable.
@@ -900,7 +901,7 @@ The **Navigate** tier is separate from Write because navigation is equivalent to
 
 | Flag | Description |
 |------|-------------|
-| `--allow-write` | Enable click/focus/type/scroll commands |
+| `--allow-write` | Enable click/focus/type/scroll/js commands |
 | `--allow-sensitive` | Enable whoami (cookie access) |
 | `--allow-all` | Shorthand for both |
 | `--no-confirm` | Skip user confirmation for write actions (use with caution) |
@@ -979,6 +980,7 @@ dom@shell:$ disconnect
 | `domshell_click` | `click <name>` | Write |
 | `domshell_focus` | `focus <name>` | Write |
 | `domshell_scroll` | `scroll [down\|up] [N]` or `scroll <target>` | Write |
+| `domshell_js` | `js <code>` (arbitrary JavaScript execution) | Write |
 | `domshell_type` | `type <text>` | Write |
 | `domshell_submit` | `submit <input> <value> [--submit btn]` (atomic form fill) | Write |
 | `domshell_whoami` | `whoami` | Sensitive |
@@ -1009,7 +1011,7 @@ dom@shell:$ disconnect
 
 ### JavaScript Layer
 
-- [ ] **`js` command** — execute arbitrary JavaScript in the tab context and return the result
+- [x] **`js` command** — execute arbitrary JavaScript in the tab context and return the result
 - [ ] **JS functions as executables** — expose page-level JavaScript functions as "files" in a virtual `/js/` or `/functions/` directory; `ls /js/` lists callable functions, `cat /js/fetchData` shows the signature, and running `/js/fetchData --arg1 value` executes it with arguments
 - [ ] **`eval <expr>`** — quick expression evaluation (e.g. `eval document.title`, `eval window.location.href`)
 

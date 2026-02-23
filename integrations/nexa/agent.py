@@ -86,11 +86,13 @@ COMMANDS: tabs, open <url>, navigate <url>, cd <path>, ls, find [pattern], \
 find --type TYPE (accepts aliases: input, dropdown, nav, toggle, modal, image, btn, etc.), \
 grep <pattern>, text [name], text --links [name], cat <name>, extract_links, \
 extract_table <name>, click <name>, focus <name>, type <text>, submit <input> <value>, \
-scroll down [N], scroll up [N], scroll <element_name>
+scroll down [N], scroll up [N], scroll <element_name>, \
+js <code> (execute JavaScript in tab, returns result)
 
 WORKFLOW: tabs → open URL → cd section → text to read content.
 Use "text --links <name>" to get text with link URLs inline as [text](url).
 Use "scroll down" to see below-the-fold content, "scroll element_name" to jump to a section.
+Use "js <code>" for batch DOM queries (e.g. extract all items with CSS selectors in one call).
 
 When done, respond in plain text (no JSON)."""
 
@@ -108,6 +110,7 @@ TYPICAL WORKFLOW:
 5. Scroll to reach content: domshell_scroll down (page) or domshell_scroll with target (element into view)
 6. Inspect details: domshell_cat shows full metadata — AX role, DOM tag, href, src, id, class, outerHTML
 7. Interact: domshell_click, domshell_focus + domshell_type, or domshell_submit (atomic form fill)
+8. Advanced extraction: domshell_js for batch DOM queries via CSS selectors (one call replaces many)
 
 BROWSER HIERARCHY:
 - "~" or "/" = browser root. "ls" shows windows/ and tabs/.
@@ -125,6 +128,7 @@ EFFICIENT PATTERNS:
 7. Form Interaction: domshell_submit for atomic fill, or focus → type → click
 8. Link URLs: find --type link --meta (shows href per link) OR text --links (inline in text)
 9. Below-the-fold: scroll down → ls --text. For known targets: find --type heading → scroll target → text
+10. Batch JS Extraction: js [...document.querySelectorAll('.item')].map(el => el.textContent) — one call for repetitive extraction
 
 COMMAND CHAINING:
 grep discovers sections → cd scopes context → text/find/extract extracts content.

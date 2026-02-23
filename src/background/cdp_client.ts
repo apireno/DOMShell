@@ -406,6 +406,29 @@ export class CDPClient {
   }
 
   /**
+   * Evaluate arbitrary JavaScript in the tab context.
+   * Supports async/await (Promises are automatically awaited).
+   */
+  async evaluateJs(code: string): Promise<{ value: any; type: string }> {
+    const { result, exceptionDetails } = await this.send<{
+      result: { value: any; type: string; description?: string };
+      exceptionDetails?: { exception?: { description?: string }; text?: string };
+    }>(
+      "Runtime.evaluate",
+      {
+        expression: code,
+        returnByValue: true,
+        awaitPromise: true,
+      }
+    );
+    if (exceptionDetails) {
+      const msg = exceptionDetails.exception?.description || exceptionDetails.text || "Unknown error";
+      throw new Error(msg);
+    }
+    return { value: result.value, type: result.type };
+  }
+
+  /**
    * Fetch AX trees for all frames (main + iframes) and merge them.
    * Iframe roots are injected as children of the node that owns them.
    */

@@ -285,3 +285,534 @@ OUTPUT FORMAT:
 | Task 4 | Pagination + comment extraction | 20 calls |
 
 Wall clock time is informative but not enforced in Cowork (interactive sessions). Tool call count is the primary efficiency metric.
+
+---
+
+## Task 5: Cross-Article Section Comparison
+
+### Trial 17: Task 5 — DOMShell
+
+```
+RULES — read these first:
+- You MUST use domshell MCP tools exclusively. No other browser tools.
+- You MUST actually navigate to each page and read its content using your tools.
+  Do NOT use prior knowledge or training data to answer.
+- If you cannot find an element after 3 attempts, skip it as "[not found]".
+- Do not explore the page beyond what is needed for the task.
+- Be fast and direct. Minimize unnecessary tool calls.
+- If you are still working after 15 tool calls, wrap up with whatever you have.
+- Return partial results rather than nothing.
+
+HINT: After opening multiple tabs, use "each --pattern wiki eval <JS>" to run
+the same extraction across all Wikipedia tabs in ONE tool call instead of
+extracting from each tab individually.
+
+TASK:
+Open these 3 Wikipedia articles in separate tabs:
+1. https://en.wikipedia.org/wiki/Artificial_intelligence
+2. https://en.wikipedia.org/wiki/Machine_learning
+3. https://en.wikipedia.org/wiki/Deep_learning
+
+Extract all h2 section headings from each article. Then identify which h2 headings
+appear in ALL 3 articles (common sections).
+
+OUTPUT FORMAT:
+## Article 1: Artificial Intelligence
+- heading1
+- heading2
+...
+
+## Article 2: Machine Learning
+- heading1
+- heading2
+...
+
+## Article 3: Deep Learning
+- heading1
+- heading2
+...
+
+## Common Sections (in all 3)
+- heading1
+- heading2
+...
+```
+
+### Trial 18: Task 5 — Claude in Chrome
+
+```
+RULES — read these first:
+- You MUST use your browser tools (navigate, read_page, find, get_page_text, etc.) to complete this task. Do NOT use domshell or any external MCP tools.
+- You MUST actually navigate to each page and read its content using your tools.
+  Do NOT use prior knowledge or training data to answer.
+- If you cannot find an element after 3 attempts, skip it as "[not found]".
+- Do not explore the page beyond what is needed for the task.
+- Be fast and direct. Minimize unnecessary tool calls.
+- If you are still working after 15 tool calls, wrap up with whatever you have.
+- Return partial results rather than nothing.
+
+TASK:
+Navigate to these 3 Wikipedia articles one at a time:
+1. https://en.wikipedia.org/wiki/Artificial_intelligence
+2. https://en.wikipedia.org/wiki/Machine_learning
+3. https://en.wikipedia.org/wiki/Deep_learning
+
+Extract all h2 section headings from each article. Then identify which h2 headings
+appear in ALL 3 articles (common sections).
+
+OUTPUT FORMAT:
+## Article 1: Artificial Intelligence
+- heading1
+- heading2
+...
+
+## Article 2: Machine Learning
+- heading1
+- heading2
+...
+
+## Article 3: Deep Learning
+- heading1
+- heading2
+...
+
+## Common Sections (in all 3)
+- heading1
+- heading2
+...
+```
+
+---
+
+## Task 6: See-Also Link Chasing
+
+### Trial 19: Task 6 — DOMShell
+
+```
+RULES — read these first:
+- You MUST use domshell MCP tools exclusively. No other browser tools.
+- You MUST actually navigate to each page and read its content using your tools.
+  Do NOT use prior knowledge or training data to answer.
+- If you cannot find an element after 3 attempts, skip it as "[not found]".
+- Do not explore the page beyond what is needed for the task.
+- Be fast and direct. Minimize unnecessary tool calls.
+- If you are still working after 20 tool calls, wrap up with whatever you have.
+- Return partial results rather than nothing.
+
+HINT: Use "for" to open multiple URLs in one call:
+  for "eval [...document.querySelectorAll('#See_also ~ ul a')].slice(0,5).map(a=>a.href).join('\n')" : open {}
+Then use "each --pattern wiki eval <JS>" to extract from all open tabs at once.
+
+TASK:
+Go to https://en.wikipedia.org/wiki/Artificial_intelligence. Find the "See also"
+section. Take the first 5 links from "See also". Open each linked article in a
+new tab. Extract the first sentence from each of those 5 articles.
+
+OUTPUT FORMAT:
+## See Also Links from AI Article
+1. [Article Title] — first sentence
+2. [Article Title] — first sentence
+3. [Article Title] — first sentence
+4. [Article Title] — first sentence
+5. [Article Title] — first sentence
+```
+
+### Trial 20: Task 6 — Claude in Chrome
+
+```
+RULES — read these first:
+- You MUST use your browser tools (navigate, read_page, find, get_page_text, etc.) to complete this task. Do NOT use domshell or any external MCP tools.
+- You MUST actually navigate to each page and read its content using your tools.
+  Do NOT use prior knowledge or training data to answer.
+- If you cannot find an element after 3 attempts, skip it as "[not found]".
+- Do not explore the page beyond what is needed for the task.
+- Be fast and direct. Minimize unnecessary tool calls.
+- If you are still working after 20 tool calls, wrap up with whatever you have.
+- Return partial results rather than nothing.
+
+TASK:
+Go to https://en.wikipedia.org/wiki/Artificial_intelligence. Find the "See also"
+section. Take the first 5 links from "See also". Navigate to each linked article
+and extract the first sentence from each.
+
+OUTPUT FORMAT:
+## See Also Links from AI Article
+1. [Article Title] — first sentence
+2. [Article Title] — first sentence
+3. [Article Title] — first sentence
+4. [Article Title] — first sentence
+5. [Article Title] — first sentence
+```
+
+---
+
+## Task 7: Page API Discovery
+
+### Trial 21: Task 7 — DOMShell
+
+```
+RULES — read these first:
+- You MUST use domshell MCP tools exclusively. No other browser tools.
+- You MUST actually navigate to each page and read its content using your tools.
+  Do NOT use prior knowledge or training data to answer.
+- If you cannot find an element after 3 attempts, skip it as "[not found]".
+- Do not explore the page beyond what is needed for the task.
+- Be fast and direct. Minimize unnecessary tool calls.
+- If you are still working after 15 tool calls, wrap up with whatever you have.
+- Return partial results rather than nothing.
+
+HINT: Use "functions" to discover callable JavaScript functions on the page.
+Wikipedia pages have a MediaWiki API accessible via mw.config.get().
+
+TASK:
+Go to https://en.wikipedia.org/wiki/Artificial_intelligence.
+
+1. Use "functions" to list the callable window-level functions. Report the first
+   10 function names that are NOT standard browser APIs (focus on MediaWiki/Wikipedia-specific ones).
+
+2. Use eval to extract these MediaWiki config values in one call:
+   - wgPageName
+   - wgTitle
+   - wgArticleId
+   - wgRevisionId
+   - wgCategories (first 5)
+
+3. Use eval to call the Wikipedia REST API and get the page summary:
+   eval fetch('/api/rest_v1/page/summary/Artificial_intelligence').then(r=>r.json()).then(d=>d.extract)
+
+OUTPUT FORMAT:
+## Page Functions (first 10 non-standard)
+1. functionName
+...
+
+## MediaWiki Config
+- wgPageName: ...
+- wgTitle: ...
+- wgArticleId: ...
+- wgRevisionId: ...
+- wgCategories: ...
+
+## REST API Summary
+(paste the extract text)
+```
+
+### Trial 22: Task 7 — Claude in Chrome
+
+```
+RULES — read these first:
+- You MUST use your browser tools (navigate, read_page, find, get_page_text, javascript_exec, etc.) to complete this task. Do NOT use domshell or any external MCP tools.
+- You MUST actually navigate to each page and read its content using your tools.
+  Do NOT use prior knowledge or training data to answer.
+- If you cannot find an element after 3 attempts, skip it as "[not found]".
+- Do not explore the page beyond what is needed for the task.
+- Be fast and direct. Minimize unnecessary tool calls.
+- If you are still working after 15 tool calls, wrap up with whatever you have.
+- Return partial results rather than nothing.
+
+TASK:
+Go to https://en.wikipedia.org/wiki/Artificial_intelligence.
+
+1. Use javascript_exec to discover what MediaWiki/Wikipedia-specific global functions
+   are available on the page. Report 10 non-standard function names.
+
+2. Use javascript_exec to extract these MediaWiki config values:
+   - wgPageName
+   - wgTitle
+   - wgArticleId
+   - wgRevisionId
+   - wgCategories (first 5)
+
+3. Use javascript_exec to call the Wikipedia REST API and get the page summary:
+   fetch('/api/rest_v1/page/summary/Artificial_intelligence').then(r=>r.json()).then(d=>d.extract)
+
+OUTPUT FORMAT:
+## Page Functions (first 10 non-standard)
+1. functionName
+...
+
+## MediaWiki Config
+- wgPageName: ...
+- wgTitle: ...
+- wgArticleId: ...
+- wgRevisionId: ...
+- wgCategories: ...
+
+## REST API Summary
+(paste the extract text)
+```
+
+---
+
+## Task 8: Article Network Mapping
+
+### Trial 23: Task 8 — DOMShell
+
+```
+RULES — read these first:
+- You MUST use domshell MCP tools exclusively. No other browser tools.
+- You MUST actually navigate to each page and read its content using your tools.
+  Do NOT use prior knowledge or training data to answer.
+- If you cannot find an element after 3 attempts, skip it as "[not found]".
+- Do not explore the page beyond what is needed for the task.
+- Be fast and direct. Minimize unnecessary tool calls.
+- If you are still working after 20 tool calls, wrap up with whatever you have.
+- Return partial results rather than nothing.
+
+HINT: Use "for" to open linked articles in one call:
+  for "eval [...document.querySelector('.mw-parser-output > p').querySelectorAll('a[href^=\"/wiki/\"]')].slice(0,3).map(a=>'https://en.wikipedia.org'+a.getAttribute('href')).join('\n')" : open {}
+Then use "each --pattern wiki eval <JS>" to extract structured data from all tabs at once.
+
+TASK:
+Go to https://en.wikipedia.org/wiki/Artificial_intelligence. Find the first 3
+hyperlinks in the first paragraph of the article body (links to other Wikipedia
+articles, not external links).
+
+Open each linked article in a new tab. For ALL 4 articles (the original AI
+article + the 3 linked articles), extract:
+- Article title
+- First sentence of the article
+- Number of references (count of elements in the References section)
+
+OUTPUT FORMAT:
+## Article Network
+| # | Title | First Sentence | Ref Count |
+|---|-------|----------------|-----------|
+| 1 | Artificial intelligence | ... | N |
+| 2 | [linked article] | ... | N |
+| 3 | [linked article] | ... | N |
+| 4 | [linked article] | ... | N |
+```
+
+### Trial 24: Task 8 — Claude in Chrome
+
+```
+RULES — read these first:
+- You MUST use your browser tools (navigate, read_page, find, get_page_text, javascript_exec, etc.) to complete this task. Do NOT use domshell or any external MCP tools.
+- You MUST actually navigate to each page and read its content using your tools.
+  Do NOT use prior knowledge or training data to answer.
+- If you cannot find an element after 3 attempts, skip it as "[not found]".
+- Do not explore the page beyond what is needed for the task.
+- Be fast and direct. Minimize unnecessary tool calls.
+- If you are still working after 20 tool calls, wrap up with whatever you have.
+- Return partial results rather than nothing.
+
+TASK:
+Go to https://en.wikipedia.org/wiki/Artificial_intelligence. Find the first 3
+hyperlinks in the first paragraph of the article body (links to other Wikipedia
+articles, not external links).
+
+Navigate to each linked article. For ALL 4 articles (the original AI article + the 3
+linked articles), extract:
+- Article title
+- First sentence of the article
+- Number of references (count of elements in the References section)
+
+OUTPUT FORMAT:
+## Article Network
+| # | Title | First Sentence | Ref Count |
+|---|-------|----------------|-----------|
+| 1 | Artificial intelligence | ... | N |
+| 2 | [linked article] | ... | N |
+| 3 | [linked article] | ... | N |
+| 4 | [linked article] | ... | N |
+```
+
+---
+
+## Task 9: Dynamic Page Monitoring (DOMShell only)
+
+> CiC has no equivalent to `functions`, `call`, or `watch --until-change`.
+> This task measures DOMShell-exclusive capabilities.
+
+### Trial 25: Task 9 — DOMShell
+
+> **NOTE:** Replace `FILE_PATH` below with the absolute path to the demo page,
+> e.g. `/Users/yourname/repos/DOMShell/experiments/claude_domshell_vs_cic/demo/index.html`
+
+```
+RULES — read these first:
+- You MUST use domshell MCP tools exclusively. No other browser tools.
+- You MUST actually navigate to the page and read its content using your tools.
+  Do NOT use prior knowledge or training data to answer.
+- If you cannot find an element after 3 attempts, skip it as "[not found]".
+- Do not explore the page beyond what is needed for the task.
+- Be fast and direct. Minimize unnecessary tool calls.
+- If you are still working after 15 tool calls, wrap up with whatever you have.
+- Return partial results rather than nothing.
+
+HINT: Use "functions" to discover what's callable, "call funcName args" to invoke
+functions, and "watch cmd --until-change --interval 1" to detect when the counter changes.
+
+TASK:
+Open file://FILE_PATH
+
+1. Use "functions" to discover the page's callable functions. List them all.
+
+2. Call getCount() and report the current counter value.
+
+3. Call getMessage("Agent") and report the returned message.
+
+4. Use "watch" with --until-change to detect when the counter increments.
+   Report the before and after values.
+
+5. Call resetCount() to reset the counter to 0.
+
+6. Call getCount() again to verify it was reset.
+
+OUTPUT FORMAT:
+## Discovered Functions
+- function1()
+- function2()
+...
+
+## Function Calls
+- getCount(): [value]
+- getMessage("Agent"): [message]
+
+## Change Detection
+- Before: [value]
+- After: [value]
+- Detected at iteration: [N]
+
+## Reset Verification
+- After resetCount(): getCount() = [value]
+```
+
+### Trial 26: Task 9 — Claude in Chrome
+
+> **NOTE:** Replace `FILE_PATH` below with the absolute path to the demo page.
+
+```
+RULES — read these first:
+- You MUST use your browser tools (navigate, read_page, find, get_page_text, javascript_exec, etc.) to complete this task. Do NOT use domshell or any external MCP tools.
+- You MUST actually navigate to the page and read its content using your tools.
+  Do NOT use prior knowledge or training data to answer.
+- If you cannot find an element after 3 attempts, skip it as "[not found]".
+- Do not explore the page beyond what is needed for the task.
+- Be fast and direct. Minimize unnecessary tool calls.
+- If you are still working after 15 tool calls, wrap up with whatever you have.
+- Return partial results rather than nothing.
+
+TASK:
+Navigate to file://FILE_PATH
+
+1. Use javascript_exec to discover what callable functions are defined on window
+   (not standard browser APIs). List them all.
+
+2. Use javascript_exec to call getCount() and report the current counter value.
+
+3. Use javascript_exec to call getMessage("Agent") and report the returned message.
+
+4. Read the counter value, wait a few seconds, then read it again to detect a change.
+   Report the before and after values.
+
+5. Use javascript_exec to call resetCount() to reset the counter to 0.
+
+6. Use javascript_exec to call getCount() to verify it was reset.
+
+OUTPUT FORMAT:
+## Discovered Functions
+- function1()
+- function2()
+...
+
+## Function Calls
+- getCount(): [value]
+- getMessage("Agent"): [message]
+
+## Change Detection
+- Before: [value]
+- After: [value]
+
+## Reset Verification
+- After resetCount(): getCount() = [value]
+```
+
+---
+
+## Task 10: Search Pipeline with Replay
+
+### Trial 27: Task 10 — DOMShell
+
+```
+RULES — read these first:
+- You MUST use domshell MCP tools exclusively. No other browser tools.
+- You MUST actually navigate to each page and read its content using your tools.
+  Do NOT use prior knowledge or training data to answer.
+- If you cannot find an element after 3 attempts, skip it as "[not found]".
+- Do not explore the page beyond what is needed for the task.
+- Be fast and direct. Minimize unnecessary tool calls.
+- If you are still working after 20 tool calls, wrap up with whatever you have.
+- Return partial results rather than nothing.
+
+HINT: Save a parameterized script with "script save" using $1 for the variable:
+  script save wiki_search open https://en.wikipedia.org ; submit search_input $1 ; eval document.querySelector('.mw-parser-output > p:not(.mw-empty-elt)').textContent
+Then use "for" to run it for each search term:
+  for "eval ['Artificial intelligence','Machine learning','Deep learning'].join('\n')" : script run wiki_search {}
+
+TASK:
+Search Wikipedia for 3 different topics: "Artificial intelligence", "Machine learning",
+and "Deep learning". For each, extract the first sentence of the resulting article.
+
+Do this efficiently by:
+1. Saving a reusable search-and-extract script with variable substitution ($1)
+2. Running the script for all 3 terms using a loop
+
+Compare the first sentences and identify what they have in common.
+
+OUTPUT FORMAT:
+## Search Results
+1. **Artificial intelligence**: first sentence
+2. **Machine learning**: first sentence
+3. **Deep learning**: first sentence
+
+## Comparison
+(what the 3 topics have in common based on their first sentences)
+```
+
+### Trial 28: Task 10 — Claude in Chrome
+
+```
+RULES — read these first:
+- You MUST use your browser tools (navigate, read_page, find, get_page_text, form_input, etc.) to complete this task. Do NOT use domshell or any external MCP tools.
+- You MUST actually navigate to each page and read its content using your tools.
+  Do NOT use prior knowledge or training data to answer.
+- If you cannot find an element after 3 attempts, skip it as "[not found]".
+- Do not explore the page beyond what is needed for the task.
+- Be fast and direct. Minimize unnecessary tool calls.
+- If you are still working after 20 tool calls, wrap up with whatever you have.
+- Return partial results rather than nothing.
+
+TASK:
+Search Wikipedia for 3 different topics: "Artificial intelligence", "Machine learning",
+and "Deep learning". For each, go to wikipedia.org, search using the search box,
+click the first result, and extract the first sentence of the article.
+
+Compare the first sentences and identify what they have in common.
+
+OUTPUT FORMAT:
+## Search Results
+1. **Artificial intelligence**: first sentence
+2. **Machine learning**: first sentence
+3. **Deep learning**: first sentence
+
+## Comparison
+(what the 3 topics have in common based on their first sentences)
+```
+
+---
+
+## Tool Call Caps Summary (Updated)
+
+| Task | Complexity | Tool call cap |
+|------|-----------|--------------|
+| Task 1 | Read-only extraction | 15 calls |
+| Task 2 | Search + navigate + extract | 20 calls |
+| Task 3 | Multi-page navigation + table extraction | 25 calls |
+| Task 4 | Pagination + comment extraction | 20 calls |
+| Task 5 | Multi-tab heading comparison | 15 calls |
+| Task 6 | Link chasing + multi-tab extraction | 20 calls |
+| Task 7 | Page API discovery + REST call | 15 calls |
+| Task 8 | Article network mapping (4 articles) | 20 calls |
+| Task 9 | Dynamic page monitoring + function calls | 15 calls |
+| Task 10 | Parameterized search pipeline | 20 calls |

@@ -54,7 +54,7 @@ function audit(entry: string): void {
 // ---- Command Tiers ----
 
 const NAVIGATE_COMMANDS = new Set(["navigate", "goto", "open", "back", "forward"]);
-const WRITE_COMMANDS = new Set(["click", "focus", "type", "scroll", "js", "select", "close"]);
+const WRITE_COMMANDS = new Set(["click", "focus", "type", "scroll", "js", "select", "close", "call"]);
 const SENSITIVE_COMMANDS = new Set(["whoami"]);
 
 function getCommandTier(command: string): "read" | "navigate" | "write" | "sensitive" {
@@ -292,6 +292,12 @@ WHEN TO USE DOMSHELL (prefer over native browser tools):
 - Waiting for dynamic content: domshell_wait to poll for elements on SPA/AJAX pages
 - Detecting changes: domshell_diff after clicks/submissions to see what was added, removed, or changed in the DOM
 - Saving locations: bookmark paths with domshell_execute "bookmark name", jump back with domshell_cd "@name"
+- Discovering page functions: domshell_execute "functions pattern" lists callable window functions
+- Calling page functions: domshell_execute "call funcName arg1 arg2" invokes a global function (write-tier)
+- Monitoring changes: domshell_execute "watch ls --times 3 --interval 1" re-runs a command periodically. Use --until-change to stop when output changes.
+- Batch operations on output: domshell_execute 'for "find --type heading -n 3" : text {}' iterates over lines
+- Reusable workflows: domshell_execute "script save name cmd1 ; cmd2" then "script run name arg1 arg2" ($1, $2 replaced)
+- Cross-tab operations: domshell_execute "each --pattern wiki text" runs a command in every matching tab
 
 TYPICAL WORKFLOW:
 1. Enter a tab: domshell_here (focused tab), domshell_cd with "%here%" (composable), or domshell_open (new tab)
@@ -302,6 +308,7 @@ TYPICAL WORKFLOW:
 6. Inspect element details: domshell_cat shows full metadata — AX role, DOM tag, href/src/id/class, text, outerHTML
 7. Interact: domshell_click, domshell_focus + domshell_type, domshell_select (dropdowns)
 8. Advanced extraction: domshell_js for batch DOM queries (e.g. extract all comments in one call via CSS selectors)
+8b. Discover page APIs: domshell_execute "functions [pattern]" to find callable JS functions. Use domshell_eval "mw.config.get(...)" to access discovered APIs.
 9. Detect changes: domshell_diff after clicks/submissions to see exactly what changed (added/removed/modified elements)
 10. Navigate back: domshell_back to return to previous page (faster than re-navigating, preserves browser history)
 11. Clean up: domshell_close to close tabs when done extracting
@@ -343,7 +350,12 @@ IMPORTANT TIPS:
 - Use --json flag via domshell_execute for machine-parseable output (e.g. "ls --json", "cat --json name", "find --json --type link").
 - Use domshell_diff after clicks/submissions to see what changed — replaces re-exploration with ls/find.
 - Save frequently-visited paths with domshell_execute "bookmark name", then jump back with domshell_cd "@name".
-- Shell state (path, env, bookmarks, history) persists across service worker restarts — no need to re-navigate after extension reloads.
+- Shell state (path, env, bookmarks, scripts, history) persists across service worker restarts — no need to re-navigate after extension reloads.
+- Use domshell_execute "functions pattern" to discover callable JS functions on the page. Use domshell_execute "call funcName args" to invoke them.
+- Use domshell_execute "watch cmd --times N --interval N" to monitor changes by re-running a command periodically. Add --until-change to stop early when output differs.
+- Use domshell_execute "for source-cmd : action-template" to iterate over command output — {} is replaced with each line.
+- Use domshell_execute "script save name cmd1 ; cmd2 ; cmd3" to save reusable workflows. Run with "script run name arg1 arg2" — $1, $2 are replaced with args.
+- Use domshell_execute "each --pattern filter cmd" to run a command across multiple tabs in one call.
 - The AXTree auto-refreshes after clicks/navigation — no manual refresh needed.
 
 EFFICIENT PATTERNS:
@@ -362,6 +374,19 @@ EFFICIENT PATTERNS:
 13. Change Detection: click button → diff → extract new content. Diff shows exactly what appeared/disappeared.
 14. Bookmarked Paths: bookmark inbox → (work elsewhere) → cd @inbox to jump back. Saves re-navigation in multi-tab workflows.
 15. Structured Output: ls --json, cat --json name, find --json --type link for machine-parseable JSON. Eliminates text parsing.
+16. Iterating Over Results: for "find --type link -n 5" : cat {} — runs cat on each of the first 5 links. Replaces manual iteration with N separate calls.
+17. Cross-tab Summary: each --pattern wiki eval document.title — gets the title of every Wikipedia tab in one call.
+18. Reusable Scraping: script save scrape open URL ; cd main ; text ; close — then script run scrape to replay.
+19. Watch for Changes: watch "eval document.querySelector('.counter').textContent" --until-change --interval 1 — stops as soon as the value changes instead of burning all iterations.
+20. Parameterized Scripts: script save search open https://en.wikipedia.org ; submit search_input $1 — then script run search "machine learning" (replaces $1 with arg).
+
+MULTI-STEP AUTOMATION PATTERNS (combine Sprint 3 features for maximum efficiency):
+- Multi-tab extract: open URL1 → open URL2 → each --pattern filter eval <JS> (one call extracts from all matching tabs)
+- Discover-and-visit: for "eval [...links].map(a=>a.href).join('\\n')" : open {} (opens N tabs from discovered URLs in one call)
+- Bulk iteration: for "find --type heading -n 5" : cat {} (runs a command on each discovered element)
+- Save & replay with args: script save name cmd1 ; cmd2 → script run name arg1 ($1 replaced with arg1)
+- Monitor until change: watch "eval element.textContent" --until-change --interval 1 (returns when value changes, not after N iterations)
+- Discover-visit-extract pipeline: open page → for "eval [URLs]" : open {} → each --pattern filter eval <JS> (3 calls replaces 2N+1)
 
 COMMAND CHAINING (grep is the linchpin):
 grep discovers sections and elements by name, giving you paths for subsequent commands. Chain pattern: grep (locate) → cd (scope) → extract (read/find/text). Examples:
@@ -400,6 +425,11 @@ ANTI-PATTERNS (avoid these):
 - Do NOT use js to set dropdown values — use select <name> <value> for proper event dispatch
 - Do NOT re-explore with ls/find after a click/submit — use diff to see exactly what changed
 - Do NOT use domshell_js for read-only queries when domshell_eval is available — eval works without --allow-write
+- Do NOT manually iterate with separate calls when for can do it — for "find --type heading -n 5" : text {} replaces 5 separate text calls
+- Do NOT switch tabs manually to repeat an operation — use each --pattern filter cmd to run across all matching tabs in one call
+- Do NOT open tabs one-by-one to extract from each — use for "eval [URLs]" : open {} to open them, then each --pattern filter eval <JS> to extract (2 calls instead of 2N)
+- Do NOT make N separate eval calls for N items — use for "eval [items]" : eval <per-item query> (1 call instead of N)
+- Do NOT poll with separate tool calls to detect changes — use watch "cmd" --until-change to monitor within a single call
 
 Note: Use --no-confirm when starting the server to skip interactive confirmation prompts for write actions.`;
 

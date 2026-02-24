@@ -620,6 +620,17 @@ Options:
 | `diff [--json]` | Compare AX tree against pre-action snapshot. Shows added/removed/changed elements after click/submit/navigate. |
 | `refresh` | Force re-fetch the Accessibility Tree |
 
+### Automation
+
+| Command | Description |
+|---|---|
+| `watch <cmd> [--interval N] [--times N]` | Re-run a command periodically (default: 5 times, 2s apart). Capped at 28s. |
+| `for <source-cmd> : <action-tpl>` | Iterate over output lines. `{}` is replaced with each line. Capped at 50 items / 28s. |
+| `script list\|save\|show\|run\|delete` | Save and run multi-command scripts. Commands separated by ` ; ` in save. Persisted. |
+| `each [--pattern FILTER] <cmd>` | Run a command across all matching tabs. Restores original tab afterward. |
+| `functions [pattern] [--json]` | List callable global JS functions on the page with name, arity, params. |
+| `call <funcName> [arg1] [arg2] ...` | Call a global JS function by name. Args auto-parsed (JSON or string). Write-tier. |
+
 ### System
 
 | Command | Description |
@@ -900,9 +911,9 @@ The MCP server is hardened with multiple layers of security. **By default, it's 
 
 | Tier | Commands | Default | Enable With |
 |------|----------|---------|-------------|
-| **Read** | `ls`, `cd`, `pwd`, `cat`, `text`, `grep`, `find`, `tree`, `refresh`, `tabs`, `windows`, `here`, `screenshot`, `wait`, `eval`, `diff`, `history`, `bookmark` | Enabled | *(always on)* |
+| **Read** | `ls`, `cd`, `pwd`, `cat`, `text`, `grep`, `find`, `tree`, `refresh`, `tabs`, `windows`, `here`, `screenshot`, `wait`, `eval`, `diff`, `history`, `bookmark`, `functions`, `watch`, `for`, `script`, `each` | Enabled | *(always on)* |
 | **Navigate** | `navigate`, `goto`, `open`, `back`, `forward` | **Disabled** | `--allow-write` |
-| **Write** | `click`, `focus`, `type`, `scroll`, `js`, `select`, `close` | **Disabled** | `--allow-write` |
+| **Write** | `click`, `focus`, `type`, `scroll`, `js`, `select`, `close`, `call` | **Disabled** | `--allow-write` |
 | **Sensitive** | `whoami` (exposes cookies) | **Disabled** | `--allow-sensitive` |
 
 The **Navigate** tier is separate from Write because navigation is equivalent to typing a URL — it requires `--allow-write` but skips the interactive confirmation prompt. This is important for Claude Desktop where `/dev/tty` is unavailable.
@@ -1002,6 +1013,12 @@ dom@shell:$ disconnect
 | `domshell_eval` | `eval <expression>` (read-only JS evaluation, no `--allow-write` needed) | Read |
 | `domshell_diff` | `diff [--json]` (compare tree against pre-action snapshot) | Read |
 | `domshell_whoami` | `whoami` | Sensitive |
+| `domshell_functions` | `functions [pattern] [--json]` (list callable page functions) | Read |
+| `domshell_call` | `call <funcName> [args]` (call a global JS function) | Write |
+| `domshell_watch` | `watch <cmd> [--interval N] [--times N]` (periodic re-execution) | Read |
+| `domshell_for` | `for <source> : <template>` (iterate over output lines) | Read |
+| `domshell_script` | `script list\|save\|show\|run\|delete` (multi-command scripts) | Read |
+| `domshell_each` | `each [--pattern FILTER] <cmd>` (cross-tab operations) | Read |
 | `domshell_execute` | *(any command)* | Varies |
 
 ## Roadmap
@@ -1015,7 +1032,7 @@ dom@shell:$ disconnect
 
 ### New Commands
 
-- [ ] **`watch` / `cron`** — periodic re-execution of a command (e.g. `watch ls` to poll for DOM changes, `cron "5s" "text main"` to sample content)
+- [x] **`watch`** — periodic re-execution of a command (e.g. `watch ls --times 3 --interval 1` to poll for DOM changes)
 - [x] **`history`** — command history with recall (`history`, `!n` to re-run)
 - [x] **`back` / `forward`** — browser-style history navigation within the current tab
 - [x] **`close`** — close the current tab (`close` or `close <tab-id>`)
@@ -1024,13 +1041,13 @@ dom@shell:$ disconnect
 - [x] **`select <name>`** — select an option from a `<select>` dropdown by value or visible text
 - [x] **`scroll`** — scroll the page or a specific element (`scroll down`, `scroll up`, `scroll <name>`)
 - [x] **`wait`** — wait for a specific element to appear (e.g. `wait submit_btn` blocks until it exists in the tree)
-- [ ] **`for` loop** — iterate over elements (e.g. `for item in $(find --type link); do cat $item; done`) — basic shell-style looping for batch operations
-- [ ] **`.sh` scripts** — save and execute multi-command shell scripts (e.g. `run scrape.sh`) for repeatable workflows
+- [x] **`for` loop** — iterate over command output lines (e.g. `for "find --type heading -n 3" : text {}`) — replaces manual iteration
+- [x] **`script` command** — save and run multi-command scripts (e.g. `script save scrape open url ; cd main ; text`) for repeatable workflows
 
 ### JavaScript Layer
 
 - [x] **`js` command** — execute arbitrary JavaScript in the tab context and return the result
-- [ ] **JS functions as executables** — expose page-level JavaScript functions as "files" in a virtual `/js/` or `/functions/` directory; `ls /js/` lists callable functions, `cat /js/fetchData` shows the signature, and running `/js/fetchData --arg1 value` executes it with arguments
+- [x] **`functions` + `call`** — `functions [pattern]` lists callable global JS functions with name/arity/params; `call funcName arg1 arg2` invokes them. `call` is write-tier.
 - [x] **`eval <expr>`** — quick expression evaluation (e.g. `eval document.title`, `eval window.location.href`)
 
 ### Agent Ergonomics
@@ -1042,9 +1059,9 @@ dom@shell:$ disconnect
 - [x] **Sibling navigation** — `--after`/`--before` flags on `ls` to slice children relative to a landmark element (e.g. `ls --after heading --type link --meta`)
 - [x] **`--links` flag on `text`** — include hyperlink URLs inline as markdown `[text](url)` in text output; extracts both content and link destinations in a single call (e.g. `text --links main/paragraph`)
 - [x] **Fuzzy type aliases for `find`** — `find --type` accepts natural-language aliases (input, dropdown, nav, toggle, modal, image, btn, sidebar, etc.) that expand to matching AX roles — eliminates wasted tool calls from guessing exact role names
-- [ ] **Visible text inheritance** — pre-compute visible text from descendant nodes and cache on VFS nodes for fast content-based search without per-node CDP calls
+- [x] **Visible text cache** — lazy cache for `innerText` results, keyed by `backendDOMNodeId`, cleared on tree rebuild — eliminates redundant CDP calls during `--content` matching in `grep`/`find`
 - [x] **`bookmark` / `alias`** — save named paths for quick navigation (e.g. `bookmark inbox ~/tabs/gmail/main/inbox_list`, `cd @inbox`)
-- [ ] **Multi-tab operations** — run a command across multiple tabs (e.g. `each tab text main` to extract text from every open tab)
+- [x] **`each` (multi-tab)** — run a command across multiple tabs (e.g. `each --pattern wiki text` to extract text from every Wikipedia tab)
 - [x] **Structured output mode** — `--json` flag on commands for machine-parseable output (e.g. `ls --json`, `cat --json`, `find --json`, `diff --json`)
 - [x] **Session persistence** — save and restore shell state (path, env vars, bookmarks, history) across service worker restarts via `chrome.storage.local`
 - [x] **`diff`** — compare AX tree snapshots to see what changed after an action (auto-snapshots before click/submit/navigate)

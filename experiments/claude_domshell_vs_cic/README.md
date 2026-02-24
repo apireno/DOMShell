@@ -19,13 +19,46 @@ DOMShell's filesystem-metaphor MCP tools are **as fast or faster** than Claude i
 
 ## Tasks
 
-Three tasks on Wikipedia (stable, no paywalls, consistent layout):
+### Phase 1 (R1-R11): Core Extraction — Tasks 1-4
+
+Four tasks testing single-tab extraction and navigation:
 
 **Task 1: Content Extraction (Read-only)** — Extract first paragraph + first 10 body links with titles and URLs from the AI article.
 
 **Task 2: Search + Navigate (Read + Interact)** — Go to wikipedia.org, search "machine learning" using the search box, click the first result, extract first paragraph + "See also" items.
 
 **Task 3: Multi-step Information Gathering (Complex)** — Navigate to the LLM article, extract first 5 models from the table with orgs, follow the first model's link, extract its first paragraph.
+
+**Task 4: Pagination + Comment Extraction (Hacker News)** — Extract stories from HN page 1 and 2, plus top comments.
+
+### Phase 2 (Sprint 3): Multi-tab Automation — Tasks 5-10
+
+Six tasks designed to exercise Sprint 3 automation features (`each`, `for`, `functions`, `call`, `watch`, `script`). These are multi-tab, multi-iteration tasks where Sprint 3 features provide significant call count savings.
+
+**Task 5: Cross-Article Section Comparison** — Open 3 Wikipedia articles, extract h2 headings from all, find common sections. Tests `each` for cross-tab extraction.
+
+**Task 6: See-Also Link Chasing** — Follow 5 "See also" links from the AI article, extract first sentence from each. Tests `for` (bulk open) + `each` (bulk extract).
+
+**Task 7: Page API Discovery** — Discover MediaWiki functions, extract config values, call REST API. Tests `functions` + `eval`.
+
+**Task 8: Article Network Mapping** — Map first-paragraph links from the AI article, extract structured data from all 4 articles. Tests `for` + `each`.
+
+**Task 9: Dynamic Page Monitoring** — Discover and call functions on a demo page, monitor a counter for changes. Tests `functions` + `call` + `watch --until-change`.
+
+**Task 10: Search Pipeline with Replay** — Save a parameterized search script, replay for 3 search terms. Tests `script` (with `$1` substitution) + `for`.
+
+#### Sprint 3 Feature Coverage Matrix
+
+| Feature | T5 | T6 | T7 | T8 | T9 | T10 |
+|---------|:--:|:--:|:--:|:--:|:--:|:---:|
+| `each` | ** | ** | | ** | | |
+| `for` | | ** | | ** | | ** |
+| `functions` | | | ** | | ** | |
+| `call` | | | | | ** | |
+| `watch` | | | | | ** | |
+| `script` | | | | | | ** |
+
+`**` = primary feature exercised
 
 ## Metrics
 
@@ -129,18 +162,17 @@ For practical convenience, all 6 DOMShell trials can be run in a single Cowork s
 ```
 claude_domshell_vs_cic/
 ├── README.md               ← You are here
-├── prompts.md              ← Copy-paste prompts for each trial
+├── prompts.md              ← Copy-paste prompts for each trial (T1-T10)
+├── demo/
+│   └── index.html          ← Self-contained demo page for T9 (dynamic content)
 └── results/
-    ├── ground_truth.md     ← Expected answers for scoring
-    ├── results.md          ← Latest trial data (Round 3)
+    ├── ground_truth.md     ← Expected answers for scoring (T1-T10)
+    ├── results.md          ← Phase 1 trial data (T1-T4, Rounds 1-11)
+    ├── sprint3_results.md  ← Phase 2 trial data (T5-T10, Sprint 3 features)
     ├── analysis.md         ← Latest analysis with roadmap
-    ├── first_run/          ← Round 1 results (baseline, before improvements)
-    │   ├── results.md
-    │   ├── analysis.md
-    │   └── domshell_improvements.md  ← Suggestions that drove Round 2/3 changes
-    └── second_run/         ← Round 2 results (after new tools, before composition)
-        ├── results.md
-        └── analysis.md
+    ├── first_run/          ← Round 1 results (baseline)
+    ├── second_run/         ← Round 2 results
+    └── third_run/          ← Round 3 results
 ```
 
 ## Results Summary (Round 3)

@@ -48,14 +48,15 @@ READ_TOOLS = {
     "domshell_extract_links", "domshell_extract_table",
     "domshell_refresh", "domshell_screenshot", "domshell_wait",
     "domshell_eval", "domshell_diff",
-    "domshell_execute",
+    "domshell_execute", "domshell_functions",
+    "domshell_watch", "domshell_for", "domshell_script", "domshell_each",
 }
 
 WRITE_TOOLS = {
     "domshell_click", "domshell_focus", "domshell_type",
     "domshell_navigate", "domshell_open", "domshell_submit",
     "domshell_back", "domshell_forward", "domshell_close",
-    "domshell_select",
+    "domshell_select", "domshell_call",
 }
 
 # Abbreviated tool names that models might output → canonical MCP name
@@ -72,6 +73,9 @@ TOOL_ALIASES = {
     "forward": "domshell_forward", "close": "domshell_close",
     "screenshot": "domshell_screenshot", "select": "domshell_select",
     "wait": "domshell_wait", "eval": "domshell_eval", "diff": "domshell_diff",
+    "functions": "domshell_functions", "call": "domshell_call",
+    "watch": "domshell_watch", "for": "domshell_for",
+    "script": "domshell_script", "each": "domshell_each",
 }
 
 # ---------------------------------------------------------------------------
@@ -96,7 +100,10 @@ extract_table <name>, click <name>, focus <name>, type <text>, submit <input> <v
 select <name> <value>, scroll down [N], scroll up [N], scroll <element_name>, \
 screenshot, wait <pattern> [--timeout N], diff [--json], \
 eval <expr> (read-only JS evaluation), js <code> (execute JavaScript in tab), \
-history [-n N], bookmark [name] [path], bookmark --delete <name>
+history [-n N], bookmark [name] [path], bookmark --delete <name>, \
+functions [pattern] [--json], call <funcName> [args], \
+watch <cmd> [--interval N] [--times N] [--until-change], for <source-cmd> : <action-template>, \
+script list|save|show|run|delete, each [--pattern FILTER] <cmd>
 
 WORKFLOW: tabs → open URL → cd section → text to read content.
 Use "text --links <name>" to get text with link URLs inline as [text](url).
@@ -109,6 +116,13 @@ Use "wait <pattern>" for dynamic content that loads after actions.
 Use "diff" after clicks/submissions to see what changed. Use "diff --json" for machine-parseable output.
 Use "--json" flag on ls, cat, find for structured JSON output.
 Use "bookmark name" to save current path, "cd @name" to jump back.
+Use "functions pattern" to discover page functions, "call funcName args" to invoke them.
+Use "watch cmd --until-change" to stop when output changes. "watch cmd --times N" for N iterations.
+Use "script save name cmd1 ; cmd2" to save workflows, "script run name arg1" to replay ($1 replaced).
+Use "each --pattern filter cmd" to run a command across multiple tabs.
+AUTOMATION: for "eval [items]" : open {} opens N tabs in 1 call. \
+each --pattern filter eval <JS> extracts from all matching tabs in 1 call. \
+script save name open URL ; submit input $1 → script run name "term" for parameterized replay.
 
 When done, respond in plain text (no JSON)."""
 
@@ -132,6 +146,8 @@ TYPICAL WORKFLOW:
 11. Navigate back: use back/forward for browser history — faster than navigate, uses browser cache
 12. Dynamic content: use wait <pattern> to block until an element appears after actions
 13. Tab cleanup: use close to close tabs when done with multi-tab workflows
+14. Automation: use watch to monitor (--until-change to stop on changes), for to iterate, script to replay (with $1 args), each for cross-tab operations
+15. Page functions: use functions to discover callable functions, call to invoke them
 
 BROWSER HIERARCHY:
 - "~" or "/" = browser root. "ls" shows windows/ and tabs/.
@@ -156,6 +172,11 @@ EFFICIENT PATTERNS:
 14. Change detection: click button → diff → extract new content (see exactly what appeared/disappeared)
 15. Bookmarked paths: bookmark inbox → (work elsewhere) → cd @inbox to jump back
 16. Structured output: ls --json, cat --json name, find --json --type link for machine-parseable JSON
+17. Iterating: for "find --type link -n 5" : cat {} — runs cat on each of the first 5 links
+18. Cross-tab: each --pattern wiki eval document.title — gets title from every Wikipedia tab
+19. Saved workflows: script save search open URL ; submit input $1 → script run search "term" ($1 replaced)
+20. Watch for changes: watch "eval element.textContent" --until-change --interval 1 (returns when value changes)
+21. Discover-visit-extract: open page → for "eval [URLs]" : open {} → each --pattern filter eval <JS> (3 calls replaces 2N+1)
 
 COMMAND CHAINING:
 grep discovers sections → cd scopes context → text/find/extract extracts content.
@@ -172,6 +193,10 @@ ANTI-PATTERNS:
 - Do NOT poll with repeated find for dynamic content — use wait <pattern>
 - Do NOT re-explore with ls/find after a click/submit — use diff to see what changed
 - Do NOT use js for read-only queries — use eval instead (works without write permission)
+- Do NOT manually iterate with separate calls — use for "source-cmd" : action {} instead
+- Do NOT switch tabs manually to repeat an operation — use each --pattern filter cmd
+- Do NOT open tabs one-by-one — use for "eval [URLs]" : open {} then each --pattern filter eval <JS> (2 calls instead of 2N)
+- Do NOT poll with separate tool calls to detect changes — use watch "cmd" --until-change
 
 When you have enough information to answer the user's question, respond in natural \
 language WITHOUT a function call. The conversation ends when you give a plain text answer."""

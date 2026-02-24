@@ -29,6 +29,24 @@ let nodeMap: Map<string, AXNode> = new Map();
 let treeStale = false;
 let commandHistory: string[] = [];
 let bookmarks: Record<string, string[]> = {};
+let scripts: Record<string, string[]> = {};
+
+/** Lazy cache for visible text (innerText), keyed by backendDOMNodeId. Cleared on tree rebuild. */
+let textContentCache: Map<number, string> = new Map();
+
+/** Get innerText with caching — avoids repeated CDP calls for the same node within one tree lifecycle. */
+async function getCachedInnerText(backendDOMNodeId: number): Promise<string> {
+  const cached = textContentCache.get(backendDOMNodeId);
+  if (cached !== undefined) return cached;
+  try {
+    const text = await cdp.getInnerText(backendDOMNodeId);
+    textContentCache.set(backendDOMNodeId, text);
+    return text;
+  } catch {
+    textContentCache.set(backendDOMNodeId, "");
+    return "";
+  }
+}
 
 // Snapshot for diff: saved before write/navigate commands
 interface SnapshotEntry { role: string; name: string; value?: string; childCount: number }
@@ -59,6 +77,7 @@ function persistState(): void {
     domshell_path: state.path,
     domshell_env: state.env,
     domshell_bookmarks: bookmarks,
+    domshell_scripts: scripts,
     domshell_history: commandHistory.slice(-500),
   });
 }
@@ -160,6 +179,7 @@ async function cdpSwitchToTab(tabId: number): Promise<{ tab: chrome.tabs.Tab; no
 
   const axNodes = await cdp.getAllFrameAXTrees();
   nodeMap = buildNodeMap(axNodes);
+  textContentCache = new Map();
 
   const root = findRootNode(nodeMap);
   state.axNodeIds = root ? [root.nodeId] : [];
@@ -392,7 +412,7 @@ chrome.storage.local.get(["ws_enabled", "ws_token", "ws_port"], (result) => {
 
 // Restore shell state on service worker restart
 chrome.storage.local.get(
-  ["domshell_path", "domshell_env", "domshell_bookmarks", "domshell_history"],
+  ["domshell_path", "domshell_env", "domshell_bookmarks", "domshell_scripts", "domshell_history"],
   (result) => {
     if (Array.isArray(result.domshell_path)) {
       state.path = result.domshell_path;
@@ -404,6 +424,9 @@ chrome.storage.local.get(
     }
     if (result.domshell_bookmarks && typeof result.domshell_bookmarks === "object") {
       bookmarks = result.domshell_bookmarks;
+    }
+    if (result.domshell_scripts && typeof result.domshell_scripts === "object") {
+      scripts = result.domshell_scripts;
     }
     if (Array.isArray(result.domshell_history)) {
       commandHistory = result.domshell_history.slice(-500);
@@ -1113,6 +1136,123 @@ const COMMAND_HELP: Record<string, string> = {
     "  eval [...document.querySelectorAll('h2')].map(h => h.textContent)",
   ].join("\r\n"),
 
+  functions: [
+    "\x1b[1;36mfunctions\x1b[0m \u2014 List callable global JavaScript functions on the page",
+    "",
+    "\x1b[33mUsage:\x1b[0m functions [pattern] [--json]",
+    "",
+    "Enumerates all own-property functions on `window` with name, arity, and params.",
+    "",
+    "\x1b[33mOptions:\x1b[0m",
+    "  \x1b[32mpattern\x1b[0m    Filter by name substring",
+    "  \x1b[32m--json\x1b[0m     Output as JSON array",
+    "",
+    "\x1b[33mExamples:\x1b[0m",
+    "  functions                List all page functions",
+    "  functions fetch          Filter to names containing 'fetch'",
+    "  functions --json         Machine-readable output",
+  ].join("\r\n"),
+
+  call: [
+    "\x1b[1;36mcall\x1b[0m \u2014 Call a global JavaScript function by name",
+    "",
+    "\x1b[33mUsage:\x1b[0m call <functionName> [arg1] [arg2] ...",
+    "",
+    "Calls window[functionName](args). Arguments are auto-parsed:",
+    "  - Valid JSON literals (numbers, booleans, null, objects) stay as-is",
+    "  - Everything else is passed as a string",
+    "Supports async functions (awaits the result).",
+    "",
+    "\x1b[33mExamples:\x1b[0m",
+    "  call alert hello              Call alert('hello')",
+    "  call scrollTo 0 500           Call scrollTo(0, 500)",
+    "  call fetch /api/status        Call fetch('/api/status')",
+    "",
+    "\x1b[33mSecurity:\x1b[0m Write-tier command (requires --allow-write in MCP).",
+  ].join("\r\n"),
+
+  watch: [
+    "\x1b[1;36mwatch\x1b[0m \u2014 Periodically re-execute a command",
+    "",
+    "\x1b[33mUsage:\x1b[0m watch <command> [--interval N] [--times N] [--until-change]",
+    "",
+    "Re-runs the given command at regular intervals. Useful for monitoring changes.",
+    "",
+    "\x1b[33mOptions:\x1b[0m",
+    "  \x1b[32m--interval N\x1b[0m      Seconds between runs (default: 2, min: 0.5)",
+    "  \x1b[32m--times N\x1b[0m         Number of iterations (default: 5, max: 100)",
+    "  \x1b[32m--until-change\x1b[0m    Stop when output differs from previous iteration",
+    "",
+    "With --until-change, default iterations increase to 20 (expects early exit).",
+    "Total runtime capped at 28 seconds.",
+    "",
+    "\x1b[33mExamples:\x1b[0m",
+    "  watch ls --times 3 --interval 1       List children 3 times, 1s apart",
+    "  watch \"eval document.title\" --until-change --interval 1",
+  ].join("\r\n"),
+
+  for: [
+    "\x1b[1;36mfor\x1b[0m \u2014 Iterate over command output lines",
+    "",
+    "\x1b[33mUsage:\x1b[0m for <source-cmd> : <action-template>",
+    "",
+    "Runs <source-cmd>, splits output into lines, and for each line replaces {} in",
+    "<action-template> with the line text and executes it.",
+    "",
+    "Separator is ' : ' (space-colon-space) to avoid conflicts with URL colons.",
+    "Source output is cleaned: ANSI codes, [d]/[x] prefixes, (role) suffixes, and",
+    "trailing slashes are stripped to produce clean paths for substitution.",
+    "Capped at 50 items and 28 seconds total.",
+    "",
+    "\x1b[33mExamples:\x1b[0m",
+    "  for \"find --type heading -n 3\" : text {}    Read text of first 3 headings",
+    "  for \"eval [URLs].join('\\\\n')\" : open {}      Open N URLs from JS array",
+  ].join("\r\n"),
+
+  script: [
+    "\x1b[1;36mscript\x1b[0m \u2014 Save and run multi-command scripts",
+    "",
+    "\x1b[33mSubcommands:\x1b[0m",
+    "  \x1b[32mscript list\x1b[0m                     List saved scripts",
+    "  \x1b[32mscript save <name> <cmds>\x1b[0m        Save commands (separated by ' ; ')",
+    "  \x1b[32mscript show <name>\x1b[0m               Show commands in a script",
+    "  \x1b[32mscript run <name> [arg1] [arg2]\x1b[0m  Execute with variable substitution",
+    "  \x1b[32mscript delete <name>\x1b[0m             Delete a script",
+    "",
+    "\x1b[33mVariable substitution:\x1b[0m",
+    "  $1, $2, ... are replaced with positional args passed to 'script run'.",
+    "  $0 = script name, $# = number of args.",
+    "  If no args passed, $N remain as literal text.",
+    "",
+    "Scripts persist across service worker restarts.",
+    "Total runtime for 'script run' capped at 28 seconds.",
+    "",
+    "\x1b[33mExamples:\x1b[0m",
+    "  script save search open https://en.wikipedia.org ; submit search_input $1",
+    "  script run search \"machine learning\"",
+    "  script run search \"deep learning\"",
+  ].join("\r\n"),
+
+  each: [
+    "\x1b[1;36meach\x1b[0m \u2014 Run a command across multiple tabs",
+    "",
+    "\x1b[33mUsage:\x1b[0m each [--pattern FILTER] <command>",
+    "",
+    "Iterates over all non-chrome tabs (optionally filtered by title/URL pattern),",
+    "switches into each, runs the command, and collects results.",
+    "Restores the original tab when done.",
+    "",
+    "\x1b[33mOptions:\x1b[0m",
+    "  \x1b[32m--pattern FILTER\x1b[0m  Only tabs whose title or URL contains FILTER",
+    "",
+    "Total runtime capped at 28 seconds.",
+    "",
+    "\x1b[33mExamples:\x1b[0m",
+    "  each text                          Get text of every tab",
+    "  each --pattern wiki text            Get text from Wikipedia tabs",
+    "  each --pattern github eval document.title    Get titles of GitHub tabs",
+  ].join("\r\n"),
+
   bookmark: [
     "\x1b[1;36mbookmark\x1b[0m \u2014 Save named paths for quick navigation",
     "",
@@ -1242,6 +1382,28 @@ async function executeCommand(raw: string): Promise<string> {
     return await handleJs(rawCode);
   }
 
+  // Early-intercept: commands that need raw args before pipe splitting
+  if (firstWord === "watch") {
+    const rawArgs = spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1);
+    if (rawArgs.trim() === "--help") return COMMAND_HELP["watch"] ?? "watch <cmd> [--interval N] [--times N]";
+    return await handleWatch(rawArgs);
+  }
+  if (firstWord === "for") {
+    const rawArgs = spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1);
+    if (rawArgs.trim() === "--help") return COMMAND_HELP["for"] ?? "for <source-cmd> : <action-template>";
+    return await handleFor(rawArgs);
+  }
+  if (firstWord === "each") {
+    const rawArgs = spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1);
+    if (rawArgs.trim() === "--help") return COMMAND_HELP["each"] ?? "each [--pattern FILTER] <cmd>";
+    return await handleEach(rawArgs);
+  }
+  if (firstWord === "script") {
+    const rawArgs = spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1);
+    if (rawArgs.trim() === "--help") return COMMAND_HELP["script"] ?? "script list|save|show|run|delete";
+    return await handleScript(rawArgs);
+  }
+
   // Pipe support: split on | and chain outputs
   const pipeSegments = splitOnPipe(trimmed);
   if (pipeSegments.length > 1) {
@@ -1343,6 +1505,10 @@ async function executeCommand(raw: string): Promise<string> {
         return handleBookmark(args);
       case "diff":
         return await handleDiff(args);
+      case "functions":
+        return await handleFunctions(args);
+      case "call":
+        return await handleCall(args);
       case "env":
         return handleEnv();
       case "export":
@@ -1455,6 +1621,14 @@ function handleHelp(): string {
     "  \x1b[32mfind --type link --meta | grep github\x1b[0m   Filter output with grep",
     "  \x1b[32mls --text | head -n 5\x1b[0m                  Limit output lines",
     "",
+    "\x1b[1;33mAutomation:\x1b[0m",
+    "  \x1b[32mwatch <cmd>\x1b[0m        Re-run a command periodically (\x1b[90m--interval N --times N --until-change\x1b[0m)",
+    "  \x1b[32mfor <src> : <tpl>\x1b[0m  Iterate over output lines, {} = each line",
+    "  \x1b[32mscript save|run\x1b[0m    Save and run multi-command scripts (\x1b[90mlist, show, delete\x1b[0m)",
+    "  \x1b[32meach [--pattern] <cmd>\x1b[0m  Run a command across multiple tabs",
+    "  \x1b[32mfunctions [pat]\x1b[0m    List callable page functions (\x1b[90m--json\x1b[0m)",
+    "  \x1b[32mcall <fn> [args]\x1b[0m   Call a global JS function by name",
+    "",
     "\x1b[1;33mSystem:\x1b[0m",
     "  \x1b[32mwhoami\x1b[0m             Check authentication cookies",
     "  \x1b[32menv\x1b[0m                Show environment variables",
@@ -1482,6 +1656,7 @@ async function handleRefresh(): Promise<string> {
 
   const axNodes = await cdp.getAllFrameAXTrees();
   nodeMap = buildNodeMap(axNodes);
+  textContentCache = new Map();
 
   const root = findRootNode(nodeMap);
 
@@ -1506,6 +1681,7 @@ async function ensureFreshTree(): Promise<string> {
 
   const axNodes = await cdp.getAllFrameAXTrees();
   nodeMap = buildNodeMap(axNodes);
+  textContentCache = new Map();
 
   // Check if current AX node still exists in the new tree
   const currentId = state.axNodeIds[state.axNodeIds.length - 1];
@@ -1531,6 +1707,7 @@ const COMMANDS = [
   "tree", "read", "debug", "clear", "navigate", "goto", "open", "connect", "disconnect", "text",
   "submit", "extract_links", "extract_table", "scroll", "js", "eval",
   "back", "forward", "close", "screenshot", "select", "wait", "history", "diff", "bookmark",
+  "functions", "call", "watch", "for", "script", "each",
 ];
 
 function getCompletions(partial: string, command: string): string[] {
@@ -2483,6 +2660,394 @@ async function handleJs(rawCode: string): Promise<string> {
   return output;
 }
 
+// ---- functions / call ----
+
+async function handleFunctions(args: string[]): Promise<string> {
+  ensureInsideTab();
+
+  const pa = parseArgs(args);
+  const pattern = pa.positional[0] || "";
+  const json = pa.flags.has("--json");
+
+  const code = `
+    (() => {
+      const fns = [];
+      for (const k of Object.keys(window)) {
+        try {
+          if (typeof window[k] === 'function' && window.hasOwnProperty(k)) {
+            const f = window[k];
+            fns.push({ name: k, arity: f.length, params: f.toString().match(/\\(([^)]*)\\)/)?.[1] || '' });
+          }
+        } catch {}
+      }
+      return fns.sort((a, b) => a.name.localeCompare(b.name));
+    })()
+  `;
+
+  const { value } = await cdp.evaluateJs(code);
+  if (!Array.isArray(value)) return "\x1b[90m(no functions found)\x1b[0m";
+
+  let filtered = value as Array<{ name: string; arity: number; params: string }>;
+  if (pattern) {
+    const lp = pattern.toLowerCase();
+    filtered = filtered.filter((f) => f.name.toLowerCase().includes(lp));
+  }
+
+  if (filtered.length === 0) {
+    return pattern
+      ? `\x1b[90m(no functions matching '${pattern}')\x1b[0m`
+      : "\x1b[90m(no functions found)\x1b[0m";
+  }
+
+  if (json) {
+    return JSON.stringify(filtered);
+  }
+
+  const lines: string[] = [`\x1b[1;36mFunctions (${filtered.length}):\x1b[0m`];
+  for (const f of filtered) {
+    const params = f.params ? `(${f.params})` : `()`;
+    lines.push(`  \x1b[32m${f.name}\x1b[0m${params}`);
+  }
+  return lines.join("\r\n");
+}
+
+async function handleCall(args: string[]): Promise<string> {
+  ensureInsideTab();
+
+  if (args.length === 0) {
+    return "\x1b[31mUsage: call <functionName> [arg1] [arg2] ...\x1b[0m";
+  }
+
+  const funcName = args[0];
+  const callArgs = args.slice(1);
+
+  // Build argument list: try JSON.parse each arg, fall back to string
+  const jsArgs = callArgs.map((a) => {
+    try {
+      JSON.parse(a); // valid JSON literal — use as-is
+      return a;
+    } catch {
+      return JSON.stringify(a); // wrap as string
+    }
+  });
+
+  const code = `(async () => {
+    const fn = window[${JSON.stringify(funcName)}];
+    if (typeof fn !== 'function') throw new Error(${JSON.stringify(funcName)} + ' is not a function');
+    return await fn(${jsArgs.join(", ")});
+  })()`;
+
+  const { value, type } = await cdp.evaluateJs(code);
+
+  if (type === "undefined" || value === undefined) {
+    return "\x1b[90mundefined\x1b[0m";
+  }
+
+  let output: string;
+  if (typeof value === "string") {
+    output = value;
+  } else {
+    try {
+      output = JSON.stringify(value, null, 2);
+    } catch {
+      output = String(value);
+    }
+  }
+
+  if (output.length > 10000) {
+    output = output.slice(0, 10000) + `\n\x1b[33m... truncated (${output.length} chars total)\x1b[0m`;
+  }
+
+  return output;
+}
+
+// ---- watch ----
+
+async function handleWatch(rawArgs: string): Promise<string> {
+  const args = rawArgs.trim();
+  if (!args) return "\x1b[31mUsage: watch <command> [--interval N] [--times N] [--until-change]\x1b[0m";
+
+  // Extract --interval, --times, and --until-change from args
+  let interval = 2;
+  let times = 5;
+  let untilChange = false;
+  let innerCmd = args;
+
+  const intervalMatch = args.match(/--interval\s+(\d+(?:\.\d+)?)/);
+  if (intervalMatch) {
+    interval = Math.max(0.5, parseFloat(intervalMatch[1]));
+    innerCmd = innerCmd.replace(intervalMatch[0], "");
+  }
+  const timesMatch = args.match(/--times\s+(\d+)/);
+  if (timesMatch) {
+    times = Math.min(100, Math.max(1, parseInt(timesMatch[1], 10)));
+    innerCmd = innerCmd.replace(timesMatch[0], "");
+  }
+  if (/--until-change/.test(innerCmd)) {
+    untilChange = true;
+    innerCmd = innerCmd.replace(/--until-change/, "");
+    // When watching for changes, default to more iterations (agent expects early exit)
+    if (!timesMatch) times = 20;
+  }
+  innerCmd = innerCmd.trim();
+  if (!innerCmd) return "\x1b[31mwatch: no command specified\x1b[0m";
+
+  const results: string[] = [];
+  const start = Date.now();
+  const maxMs = 28000;
+  let prevOutput: string | null = null;
+
+  for (let i = 0; i < times; i++) {
+    if (Date.now() - start > maxMs) {
+      results.push(`\x1b[33m--- watch: time limit reached (${i}/${times} iterations) ---\x1b[0m`);
+      break;
+    }
+    const output = await executeCommand(innerCmd);
+
+    if (untilChange) {
+      if (prevOutput !== null && output !== prevOutput) {
+        results.push(`\x1b[1;32m--- Change detected at iteration ${i + 1} ---\x1b[0m`);
+        results.push(`\x1b[33mBefore:\x1b[0m ${prevOutput}`);
+        results.push(`\x1b[33mAfter:\x1b[0m  ${output}`);
+        return results.join("\r\n");
+      }
+      prevOutput = output;
+    } else {
+      results.push(`\x1b[1;36m--- Iteration ${i + 1}/${times} ---\x1b[0m`);
+      results.push(output);
+    }
+
+    if (i < times - 1 && Date.now() - start + interval * 1000 < maxMs) {
+      await new Promise((r) => setTimeout(r, interval * 1000));
+    }
+  }
+
+  if (untilChange) {
+    results.push(`\x1b[33m--- No change detected after ${times} iterations ---\x1b[0m`);
+    if (prevOutput !== null) results.push(`\x1b[33mLast value:\x1b[0m ${prevOutput}`);
+  }
+
+  return results.join("\r\n");
+}
+
+// ---- for ----
+
+async function handleFor(rawArgs: string): Promise<string> {
+  const args = rawArgs.trim();
+  if (!args) return "\x1b[31mUsage: for <source-cmd> : <action-template>\x1b[0m";
+
+  // Split on ' : ' (space-colon-space) to distinguish from URLs
+  const sepIdx = args.indexOf(" : ");
+  if (sepIdx === -1) {
+    return "\x1b[31mfor: missing ' : ' separator. Usage: for <source-cmd> : <action-template>\x1b[0m";
+  }
+
+  const sourceCmd = args.slice(0, sepIdx).trim();
+  const template = args.slice(sepIdx + 3).trim();
+  if (!sourceCmd) return "\x1b[31mfor: empty source command\x1b[0m";
+  if (!template) return "\x1b[31mfor: empty action template\x1b[0m";
+
+  // Execute source command
+  const sourceOutput = await executeCommand(sourceCmd);
+  const items = sourceOutput
+    .split("\r\n")
+    .map((line) => {
+      let s = stripAnsi(line).trim();
+      // Strip leading [d]/[x]/[-] type prefix from find output
+      s = s.replace(/^\[.\]\s*/, "");
+      // Strip trailing (role) suffix from find output
+      s = s.replace(/\s*\([^)]+\)\s*$/, "");
+      // Strip trailing / from directory paths
+      s = s.replace(/\/$/, "");
+      return s;
+    })
+    .filter(Boolean);
+
+  if (items.length === 0) return "\x1b[90m(no items from source command)\x1b[0m";
+
+  const maxItems = 50;
+  const maxMs = 28000;
+  const start = Date.now();
+  const results: string[] = [];
+
+  for (let i = 0; i < Math.min(items.length, maxItems); i++) {
+    if (Date.now() - start > maxMs) {
+      results.push(`\x1b[33m--- for: time limit reached (${i}/${items.length} items) ---\x1b[0m`);
+      break;
+    }
+    const cmd = template.replace(/\{\}/g, items[i]);
+    results.push(`\x1b[90m> ${cmd}\x1b[0m`);
+    const output = await executeCommand(cmd);
+    results.push(output);
+  }
+
+  if (items.length > maxItems) {
+    results.push(`\x1b[33m--- for: capped at ${maxItems} items (${items.length} total) ---\x1b[0m`);
+  }
+
+  return results.join("\r\n");
+}
+
+// ---- script ----
+
+async function handleScript(rawArgs: string): Promise<string> {
+  const parts = rawArgs.trim().split(/\s+/);
+  const sub = parts[0]?.toLowerCase();
+
+  if (!sub || sub === "list") {
+    const names = Object.keys(scripts);
+    if (names.length === 0) return "\x1b[90m(no saved scripts)\x1b[0m";
+    const lines = ["\x1b[1;36mScripts:\x1b[0m"];
+    for (const name of names) {
+      lines.push(`  \x1b[32m${name}\x1b[0m  (${scripts[name].length} commands)`);
+    }
+    return lines.join("\r\n");
+  }
+
+  if (sub === "save") {
+    const name = parts[1];
+    if (!name) return "\x1b[31mscript save: specify a name\x1b[0m";
+    // Everything after "save <name> " is the commands, separated by " ; "
+    const rest = rawArgs.trim().slice(rawArgs.trim().indexOf(name) + name.length).trim();
+    if (!rest) return "\x1b[31mscript save: specify commands separated by ' ; '\x1b[0m";
+    const cmds = rest.split(/\s*;\s*/).filter(Boolean);
+    if (cmds.length === 0) return "\x1b[31mscript save: no commands found\x1b[0m";
+    scripts[name] = cmds;
+    persistState();
+    return `\x1b[32m\u2713 Script '${name}' saved (${cmds.length} commands).\x1b[0m`;
+  }
+
+  if (sub === "show") {
+    const name = parts[1];
+    if (!name) return "\x1b[31mscript show: specify a script name\x1b[0m";
+    if (!scripts[name]) return `\x1b[31mscript: '${name}' not found\x1b[0m`;
+    const lines = [`\x1b[1;36mScript '${name}':\x1b[0m`];
+    for (let i = 0; i < scripts[name].length; i++) {
+      lines.push(`  ${i + 1}. ${scripts[name][i]}`);
+    }
+    return lines.join("\r\n");
+  }
+
+  if (sub === "run") {
+    const name = parts[1];
+    if (!name) return "\x1b[31mscript run: specify a script name\x1b[0m";
+    if (!scripts[name]) return `\x1b[31mscript: '${name}' not found\x1b[0m`;
+    const scriptArgs = parts.slice(2); // positional args after script name
+    const cmds = scripts[name];
+    const results: string[] = [];
+    const start = Date.now();
+    const maxMs = 28000;
+
+    for (let i = 0; i < cmds.length; i++) {
+      if (Date.now() - start > maxMs) {
+        results.push(`\x1b[33m--- script: time limit reached (${i}/${cmds.length} commands) ---\x1b[0m`);
+        break;
+      }
+      // Variable substitution: $1, $2, ..., $0 = script name, $# = arg count
+      let cmd = cmds[i];
+      if (scriptArgs.length > 0) {
+        cmd = cmd.replace(/\$#/g, String(scriptArgs.length));
+        cmd = cmd.replace(/\$0/g, name);
+        for (let a = scriptArgs.length; a >= 1; a--) {
+          cmd = cmd.replace(new RegExp("\\$" + a, "g"), scriptArgs[a - 1]);
+        }
+      }
+      results.push(`\x1b[90m$ ${cmd}\x1b[0m`);
+      const output = await executeCommand(cmd);
+      results.push(output);
+    }
+    return results.join("\r\n");
+  }
+
+  if (sub === "delete") {
+    const name = parts[1];
+    if (!name) return "\x1b[31mscript delete: specify a script name\x1b[0m";
+    if (!scripts[name]) return `\x1b[31mscript: '${name}' not found\x1b[0m`;
+    delete scripts[name];
+    persistState();
+    return `\x1b[32m\u2713 Script '${name}' deleted.\x1b[0m`;
+  }
+
+  return `\x1b[31mscript: unknown subcommand '${sub}'. Use: list, save, show, run, delete\x1b[0m`;
+}
+
+// ---- each (multi-tab) ----
+
+async function handleEach(rawArgs: string): Promise<string> {
+  const args = rawArgs.trim();
+  if (!args) return "\x1b[31mUsage: each [--pattern FILTER] <command>\x1b[0m";
+
+  // Extract --pattern
+  let pattern = "";
+  let innerCmd = args;
+  const patternMatch = args.match(/--pattern\s+(\S+)/);
+  if (patternMatch) {
+    pattern = patternMatch[1].toLowerCase();
+    innerCmd = innerCmd.replace(patternMatch[0], "").trim();
+  }
+  if (!innerCmd) return "\x1b[31meach: no command specified\x1b[0m";
+
+  // Get all tabs
+  const windows = await chrome.windows.getAll({ populate: true });
+  const allTabs: chrome.tabs.Tab[] = [];
+  for (const w of windows) {
+    if (w.tabs) {
+      for (const t of w.tabs) {
+        if (t.id && t.url && !t.url.startsWith("chrome://") && !t.url.startsWith("chrome-extension://")) {
+          if (!pattern || (t.title && t.title.toLowerCase().includes(pattern)) || t.url.toLowerCase().includes(pattern)) {
+            allTabs.push(t);
+          }
+        }
+      }
+    }
+  }
+
+  if (allTabs.length === 0) {
+    return pattern
+      ? `\x1b[90m(no tabs matching '${pattern}')\x1b[0m`
+      : "\x1b[90m(no eligible tabs)\x1b[0m";
+  }
+
+  // Save current state
+  const savedPath = [...state.path];
+  const savedAxNodeIds = [...state.axNodeIds];
+  const savedTabId = state.activeTabId;
+  const savedTreeStale = treeStale;
+
+  const results: string[] = [];
+  const start = Date.now();
+  const maxMs = 28000;
+
+  for (const tab of allTabs) {
+    if (Date.now() - start > maxMs) {
+      results.push(`\x1b[33m--- each: time limit reached ---\x1b[0m`);
+      break;
+    }
+    const title = tab.title ? tab.title.slice(0, 60) : `Tab ${tab.id}`;
+    results.push(`\x1b[1;36m--- ${title} (${tab.id}) ---\x1b[0m`);
+    try {
+      await cdpSwitchToTab(tab.id!);
+      state.path = ["tabs", String(tab.id)];
+      const output = await executeCommand(innerCmd);
+      results.push(output);
+    } catch (err: any) {
+      results.push(`\x1b[31mError: ${err.message}\x1b[0m`);
+    }
+  }
+
+  // Restore previous state
+  state.path = savedPath;
+  state.axNodeIds = savedAxNodeIds;
+  if (savedTabId) {
+    try {
+      await cdpSwitchToTab(savedTabId);
+    } catch { /* original tab may be gone */ }
+  }
+  treeStale = true;
+
+  return results.join("\r\n");
+}
+
 // ---- back / forward ----
 
 async function handleBack(): Promise<string> {
@@ -2667,6 +3232,7 @@ async function handleWait(args: string[]): Promise<string> {
     // Force refresh the AX tree each poll
     const axNodes = await cdp.getAllFrameAXTrees();
     nodeMap = buildNodeMap(axNodes);
+    textContentCache = new Map();
 
     // Search for matching element
     const currentId = getCurrentNodeId();
@@ -2942,7 +3508,7 @@ async function handleGrep(args: string[]): Promise<string> {
     // Slow path: match against visible text content (only if --content flag)
     if (contentMatch && c.backendDOMNodeId) {
       try {
-        const text = await cdp.getInnerText(c.backendDOMNodeId);
+        const text = await getCachedInnerText(c.backendDOMNodeId);
         if (text.toLowerCase().includes(pattern)) {
           matches.push(c);
         }
@@ -3094,7 +3660,7 @@ async function findRecursive(
     // Slow path: match against visible text content — only for type-matched nodes
     if (!matchesPattern && contentMatch && pattern && matchesType && child.backendDOMNodeId) {
       try {
-        const text = await cdp.getInnerText(child.backendDOMNodeId);
+        const text = await getCachedInnerText(child.backendDOMNodeId);
         matchesPattern = text.toLowerCase().includes(pattern);
       } catch { /* stale node */ }
     }

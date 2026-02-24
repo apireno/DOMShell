@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DOMShell Sprint 3 Demo Page</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 600px; margin: 40px auto; padding: 0 20px; }
+    h1 { color: #333; }
+    .stat { margin: 12px 0; padding: 8px 12px; background: #f5f5f5; border-radius: 4px; }
+    .stat label { font-weight: 600; color: #555; }
+    .stat .value { font-family: monospace; font-size: 1.1em; color: #222; }
+    #latest-update { color: #888; font-size: 0.9em; margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <h1>DOMShell Demo Page</h1>
+  <p>This page has dynamic content and callable functions for testing <code>watch</code>, <code>call</code>, and <code>functions</code>.</p>
+
+  <div class="stat">
+    <label>Counter:</label>
+    <span id="counter" class="value">0</span>
+  </div>
+  <div class="stat">
+    <label>Timestamp:</label>
+    <span id="timestamp" class="value">--</span>
+  </div>
+  <div id="latest-update">Last update: --</div>
+
+  <script>
+    let count = 0;
+    const startTime = Date.now();
+
+    // Counter increments every 2 seconds
+    setInterval(() => {
+      count++;
+      document.getElementById('counter').textContent = String(count);
+      document.getElementById('latest-update').textContent =
+        'Last update: ' + new Date().toLocaleTimeString();
+    }, 2000);
+
+    // Timestamp updates every second
+    setInterval(() => {
+      document.getElementById('timestamp').textContent = new Date().toLocaleTimeString();
+    }, 1000);
+
+    // Callable window functions
+    window.getCount = function() {
+      return count;
+    };
+
+    window.resetCount = function() {
+      count = 0;
+      document.getElementById('counter').textContent = '0';
+      return 'Counter reset to 0';
+    };
+
+    window.getMessage = function(name) {
+      return 'Hello, ' + name + '! Counter is at ' + count;
+    };
+
+    window.getStats = function() {
+      return JSON.stringify({
+        counter: count,
+        startTime: new Date(startTime).toISOString(),
+        elapsed: Math.round((Date.now() - startTime) / 1000) + 's',
+        updates: count
+      });
+    };
+  </script>
+</body>
+</html>

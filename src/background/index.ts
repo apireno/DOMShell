@@ -27,6 +27,41 @@ const state: ShellState = {
 
 let nodeMap: Map<string, AXNode> = new Map();
 let treeStale = false;
+let commandHistory: string[] = [];
+let bookmarks: Record<string, string[]> = {};
+
+// Snapshot for diff: saved before write/navigate commands
+interface SnapshotEntry { role: string; name: string; value?: string; childCount: number }
+let previousSnapshot: Map<string, SnapshotEntry> | null = null;
+
+function captureSnapshot(): Map<string, SnapshotEntry> {
+  const snap = new Map<string, SnapshotEntry>();
+  for (const [id, node] of nodeMap) {
+    const vfsChildren = getChildVFSNodes(id, nodeMap);
+    const name = generateNodeName(node, nodeMap);
+    snap.set(id, {
+      role: node.role || "unknown",
+      name,
+      value: node.name || node.value?.value || undefined,
+      childCount: vfsChildren.length,
+    });
+  }
+  return snap;
+}
+
+const WRITE_NAVIGATE_COMMANDS = new Set([
+  "click", "type", "submit", "select", "navigate", "goto", "open", "back", "forward", "scroll",
+]);
+
+/** Persist shell state to chrome.storage.local for service worker restart resilience. */
+function persistState(): void {
+  chrome.storage.local.set({
+    domshell_path: state.path,
+    domshell_env: state.env,
+    domshell_bookmarks: bookmarks,
+    domshell_history: commandHistory.slice(-500),
+  });
+}
 
 // ---- Path Helpers ----
 
@@ -57,8 +92,19 @@ function isInsideTab(): boolean {
   return getTabIdFromPath(state.path) !== null;
 }
 
-/** Expand path variables like %here% to concrete paths. */
+/** Expand path variables like %here% and @bookmark to concrete paths. */
 async function expandPathVariable(target: string): Promise<string> {
+  // Expand @name bookmark references
+  if (target.startsWith("@")) {
+    const slashIdx = target.indexOf("/");
+    const name = slashIdx === -1 ? target.slice(1) : target.slice(1, slashIdx);
+    const rest = slashIdx === -1 ? "" : target.slice(slashIdx);
+    if (!name) throw new Error("bookmark: empty name after @");
+    const saved = bookmarks[name];
+    if (!saved) throw new Error(`bookmark: '@${name}' not found. Use 'bookmark' to list saved bookmarks.`);
+    return "~/" + saved.join("/") + rest;
+  }
+
   if (!target.includes("%here%")) return target;
 
   const lastFocused = await chrome.windows.getLastFocused({ populate: true });
@@ -343,6 +389,27 @@ chrome.storage.local.get(["ws_enabled", "ws_token", "ws_port"], (result) => {
     setWsStatus(wsEnabled ? "disconnected" : "disabled");
   }
 });
+
+// Restore shell state on service worker restart
+chrome.storage.local.get(
+  ["domshell_path", "domshell_env", "domshell_bookmarks", "domshell_history"],
+  (result) => {
+    if (Array.isArray(result.domshell_path)) {
+      state.path = result.domshell_path;
+      // Don't restore activeTabId or axNodeIds — CDP attachment is ephemeral.
+      // ensureInsideTab() will guide re-entry on next command.
+    }
+    if (result.domshell_env && typeof result.domshell_env === "object") {
+      state.env = { ...state.env, ...result.domshell_env };
+    }
+    if (result.domshell_bookmarks && typeof result.domshell_bookmarks === "object") {
+      bookmarks = result.domshell_bookmarks;
+    }
+    if (Array.isArray(result.domshell_history)) {
+      commandHistory = result.domshell_history.slice(-500);
+    }
+  }
+);
 
 // React to settings changes from the options page
 chrome.storage.onChanged.addListener((changes, area) => {
@@ -995,6 +1062,75 @@ const COMMAND_HELP: Record<string, string> = {
     "  find --type heading | head -n 5     First 5 headings",
     "  ls --text | head -n 3               First 3 children with text",
   ].join("\r\n"),
+
+  history: [
+    "\x1b[1;36mhistory\x1b[0m \u2014 Show command history",
+    "",
+    "\x1b[33mUsage:\x1b[0m history [-n N] | history clear",
+    "",
+    "Shows the last N commands executed (default: 20).",
+    "Use !N to re-execute command number N from history.",
+    "",
+    "\x1b[33mExamples:\x1b[0m",
+    "  history                Show last 20 commands",
+    "  history -n 50          Show last 50 commands",
+    "  history clear          Clear all history",
+    "  !5                     Re-run command #5",
+  ].join("\r\n"),
+
+  diff: [
+    "\x1b[1;36mdiff\x1b[0m \u2014 Compare AX tree against pre-action snapshot",
+    "",
+    "\x1b[33mUsage:\x1b[0m diff [--json]",
+    "",
+    "Shows what changed since the last write/navigate command (click, type, submit,",
+    "select, navigate, open, back, forward, scroll). A snapshot is automatically",
+    "saved before each of these commands.",
+    "",
+    "Reports added (+), removed (-), and changed (~) nodes.",
+    "",
+    "\x1b[33mFlags:\x1b[0m",
+    "  --json    Output as JSON for machine parsing",
+    "",
+    "\x1b[33mExamples:\x1b[0m",
+    "  click search_btn → diff    See what appeared after clicking",
+    "  submit form value → diff   See form submission results",
+  ].join("\r\n"),
+
+  eval: [
+    "\x1b[1;36meval\x1b[0m \u2014 Evaluate a JavaScript expression (read-only)",
+    "",
+    "\x1b[33mUsage:\x1b[0m eval <expression>",
+    "",
+    "Evaluates a JavaScript expression in the tab context and returns the result.",
+    "Functionally identical to 'js' but classified as a read-tier command in MCP,",
+    "so it works without --allow-write. Use for read-only queries.",
+    "",
+    "\x1b[33mExamples:\x1b[0m",
+    "  eval document.title",
+    "  eval window.location.href",
+    "  eval document.querySelectorAll('a').length",
+    "  eval [...document.querySelectorAll('h2')].map(h => h.textContent)",
+  ].join("\r\n"),
+
+  bookmark: [
+    "\x1b[1;36mbookmark\x1b[0m \u2014 Save named paths for quick navigation",
+    "",
+    "\x1b[33mUsage:\x1b[0m bookmark [name] [path] | bookmark --delete <name>",
+    "",
+    "Save the current directory under a name, then jump back with cd @name.",
+    "",
+    "\x1b[33mExamples:\x1b[0m",
+    "  bookmark                  List all bookmarks",
+    "  bookmark inbox             Save current path as 'inbox'",
+    "  bookmark inbox ~/tabs/123/main/list   Save explicit path as 'inbox'",
+    "  bookmark --delete inbox    Remove the 'inbox' bookmark",
+    "  cd @inbox                  Jump to the saved 'inbox' path",
+    "",
+    "\x1b[33mNotes:\x1b[0m",
+    "  Bookmarks persist across service worker restarts via chrome.storage.local.",
+    "  Use @name in any cd command, including compound paths: cd @inbox/item_1",
+  ].join("\r\n"),
 };
 
 // ---- Arg Parsing Utility ----
@@ -1021,7 +1157,7 @@ function parseArgs(args: string[]): ParsedArgs {
       flags.add("-r");
     } else if (a === "--count") {
       flags.add("--count");
-    } else if ((a === "-n" || a === "-d" || a === "--offset" || a === "--type" || a === "--textlen" || a === "--format" || a === "--submit" || a === "--after" || a === "--before") && i + 1 < args.length) {
+    } else if ((a === "-n" || a === "-d" || a === "--offset" || a === "--type" || a === "--textlen" || a === "--format" || a === "--submit" || a === "--after" || a === "--before" || a === "--timeout") && i + 1 < args.length) {
       named[a] = args[++i];
     } else if (a.startsWith("-")) {
       flags.add(a);
@@ -1075,15 +1211,33 @@ async function executeCommand(raw: string): Promise<string> {
   const trimmed = raw.trim();
   if (!trimmed) return "";
 
-  // Special case: 'js' command gets the raw code string — skip pipe splitting
-  // and argument parsing which would mangle JavaScript operators (|, ||) and
-  // string literals ('quotes', "quotes").
+  // !n history recall — resolve before anything else
+  const bangMatch = trimmed.match(/^!(\d+)$/);
+  if (bangMatch) {
+    const idx = parseInt(bangMatch[1], 10) - 1;
+    if (idx < 0 || idx >= commandHistory.length) {
+      return `\x1b[31mhistory: !${bangMatch[1]}: event not found\x1b[0m`;
+    }
+    const recalled = commandHistory[idx];
+    return await executeCommand(recalled);
+  }
+
+  // Record command in history (skip history/clear commands and duplicates)
   const spaceIdx = trimmed.indexOf(" ");
   const firstWord = (spaceIdx === -1 ? trimmed : trimmed.slice(0, spaceIdx)).toLowerCase();
-  if (firstWord === "js") {
+  if (firstWord !== "history" && firstWord !== "clear") {
+    commandHistory.push(trimmed);
+    if (commandHistory.length > 500) commandHistory = commandHistory.slice(-500);
+    persistState();
+  }
+
+  // Special case: 'js' and 'eval' commands get the raw code string — skip pipe
+  // splitting and argument parsing which would mangle JavaScript operators
+  // (|, ||) and string literals ('quotes', "quotes").
+  if (firstWord === "js" || firstWord === "eval") {
     const rawCode = spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1);
     if (rawCode.trim() === "--help") {
-      return COMMAND_HELP["js"] ?? "No help available for 'js'.";
+      return COMMAND_HELP[firstWord] ?? `No help available for '${firstWord}'.`;
     }
     return await handleJs(rawCode);
   }
@@ -1123,6 +1277,11 @@ async function executeCommand(raw: string): Promise<string> {
     return COMMAND_HELP[cmd] ?? `No help available for '${cmd}'.`;
   }
 
+  // Auto-snapshot before write/navigate commands for diff
+  if (WRITE_NAVIGATE_COMMANDS.has(cmd) && isInsideTab() && nodeMap.size > 0) {
+    previousSnapshot = captureSnapshot();
+  }
+
   try {
     switch (cmd) {
       case "help":
@@ -1133,8 +1292,11 @@ async function executeCommand(raw: string): Promise<string> {
         return await handleWindows();
       case "ls":
         return await handleLs(args);
-      case "cd":
-        return await handleCd(args);
+      case "cd": {
+        const cdResult = await handleCd(args);
+        persistState();
+        return cdResult;
+      }
       case "pwd":
         return handlePwd();
       case "here":
@@ -1175,6 +1337,12 @@ async function executeCommand(raw: string): Promise<string> {
         return await handleFind(args);
       case "whoami":
         return await handleWhoami();
+      case "history":
+        return handleHistory(args);
+      case "bookmark":
+        return handleBookmark(args);
+      case "diff":
+        return await handleDiff(args);
       case "env":
         return handleEnv();
       case "export":
@@ -1272,6 +1440,7 @@ function handleHelp(): string {
     "  \x1b[32mextract_table\x1b[0m      Extract a table as markdown or CSV",
     "  \x1b[32mscreenshot\x1b[0m         Capture a screenshot of the current tab",
     "  \x1b[32mwait <pattern>\x1b[0m     Wait for an element to appear (\x1b[90m--timeout N\x1b[0m)",
+    "  \x1b[32mdiff\x1b[0m               Compare tree against pre-action snapshot (\x1b[90m--json\x1b[0m)",
     "",
     "\x1b[1;33mInteraction:\x1b[0m",
     "  \x1b[32mclick <name>\x1b[0m       Click an element",
@@ -1280,6 +1449,7 @@ function handleHelp(): string {
     "  \x1b[32msubmit <input> <val>\x1b[0m  Atomic form fill + submit",
     "  \x1b[32mselect <name> <val>\x1b[0m   Select an option from a dropdown",
     "  \x1b[32mjs <code>\x1b[0m          Execute JavaScript in the tab context",
+    "  \x1b[32meval <expr>\x1b[0m        Evaluate a JS expression (read-only, no --allow-write needed)",
     "",
     "\x1b[1;33mPipes:\x1b[0m",
     "  \x1b[32mfind --type link --meta | grep github\x1b[0m   Filter output with grep",
@@ -1289,6 +1459,8 @@ function handleHelp(): string {
     "  \x1b[32mwhoami\x1b[0m             Check authentication cookies",
     "  \x1b[32menv\x1b[0m                Show environment variables",
     "  \x1b[32mexport K=V\x1b[0m         Set an environment variable",
+    "  \x1b[32mhistory\x1b[0m            Show command history (\x1b[90m-n N\x1b[0m, \x1b[90mclear\x1b[0m, \x1b[90m!N\x1b[0m to recall)",
+    "  \x1b[32mbookmark [name]\x1b[0m    Save/list named paths (\x1b[90mcd @name\x1b[0m to jump back)",
     "  \x1b[32mdebug\x1b[0m              Inspect raw AX tree data",
     "  \x1b[32mclear\x1b[0m              Clear the terminal",
     "",
@@ -1357,7 +1529,8 @@ const COMMANDS = [
   "help", "tabs", "windows", "here", "refresh", "ls", "cd", "pwd", "cat",
   "click", "focus", "type", "grep", "find", "whoami", "env", "export",
   "tree", "read", "debug", "clear", "navigate", "goto", "open", "connect", "disconnect", "text",
-  "submit", "extract_links", "extract_table",
+  "submit", "extract_links", "extract_table", "scroll", "js", "eval",
+  "back", "forward", "close", "screenshot", "select", "wait", "history", "diff", "bookmark",
 ];
 
 function getCompletions(partial: string, command: string): string[] {
@@ -1410,11 +1583,13 @@ function getCompletions(partial: string, command: string): string[] {
 
 async function handleLs(args: string[]): Promise<string> {
   const pa = parseArgs(args);
+  const jsonMode = pa.flags.has("--json");
 
   // Check for explicit ~ path argument
   if (pa.positional.length > 0 && pa.positional[0].startsWith("~")) {
     const afterTilde = pa.positional[0].slice(1).replace(/^\//, "");
     const browserPath = afterTilde ? afterTilde.split("/").filter(Boolean) : [];
+    if (jsonMode) return await listBrowserLevelJson(browserPath);
     return await listBrowserLevel(browserPath);
   }
 
@@ -1424,8 +1599,10 @@ async function handleLs(args: string[]): Promise<string> {
     if (pa.positional.length > 0) {
       const relPath = pa.positional[0].split("/").filter(Boolean);
       const fullPath = [...state.path, ...relPath];
+      if (jsonMode) return await listBrowserLevelJson(fullPath);
       return await listBrowserLevel(fullPath);
     }
+    if (jsonMode) return await listBrowserLevelJson(state.path);
     return await listBrowserLevel(state.path);
   }
 
@@ -1488,6 +1665,7 @@ async function handleLs(args: string[]): Promise<string> {
   }
 
   if (children.length === 0) {
+    if (jsonMode) return JSON.stringify({ children: [] });
     return "\x1b[90m(empty directory)\x1b[0m";
   }
 
@@ -1498,6 +1676,35 @@ async function handleLs(args: string[]): Promise<string> {
   }
   if (limit > 0) {
     children = children.slice(0, limit);
+  }
+
+  // JSON output mode
+  if (jsonMode) {
+    const items: any[] = [];
+    for (const child of children) {
+      const item: any = {
+        name: child.name,
+        role: child.role,
+        type: child.isDirectory ? "directory" : INTERACTIVE_ROLES.has(child.role) ? "interactive" : "static",
+      };
+      if (child.value) item.value = child.value;
+      if (showMeta && child.backendDOMNodeId) {
+        try {
+          const props = await cdp.getElementProperties(child.backendDOMNodeId);
+          if (props.href) item.href = props.href;
+          if (props.src) item.src = props.src;
+          if (props.id) item.id = props.id;
+          if (props.tag) item.tag = props.tag;
+        } catch { /* stale node */ }
+      }
+      if (showText && child.backendDOMNodeId) {
+        try {
+          item.text = await cdp.getInnerText(child.backendDOMNodeId);
+        } catch { /* stale node */ }
+      }
+      items.push(item);
+    }
+    return JSON.stringify({ children: items, total, offset, limit: limit || undefined });
   }
 
   const lines: string[] = [];
@@ -1639,6 +1846,44 @@ async function listBrowserLevel(browserPath: string[]): Promise<string> {
   }
 
   return `\x1b[31mInvalid browser path.\x1b[0m`;
+}
+
+async function listBrowserLevelJson(browserPath: string[]): Promise<string> {
+  const allWindows = await chrome.windows.getAll({ populate: true });
+
+  if (browserPath.length === 0 || browserPath[0] === "tabs") {
+    const tabs: any[] = [];
+    for (const win of allWindows) {
+      for (const tab of win.tabs ?? []) {
+        tabs.push({
+          id: tab.id,
+          title: tab.title ?? "untitled",
+          url: tab.url ?? "",
+          windowId: win.id,
+          active: tab.active,
+          current: tab.id === state.activeTabId,
+        });
+      }
+    }
+    return JSON.stringify({ tabs });
+  }
+
+  if (browserPath[0] === "windows") {
+    const windows: any[] = [];
+    for (const win of allWindows) {
+      const tabs = (win.tabs ?? []).map(tab => ({
+        id: tab.id,
+        title: tab.title ?? "untitled",
+        url: tab.url ?? "",
+        active: tab.active,
+        current: tab.id === state.activeTabId,
+      }));
+      windows.push({ id: win.id, focused: win.focused, tabs });
+    }
+    return JSON.stringify({ windows });
+  }
+
+  return JSON.stringify({ error: "Invalid browser path" });
 }
 
 // ---- tabs / windows shortcut commands ----
@@ -1891,16 +2136,59 @@ async function handleCat(args: string[]): Promise<string> {
   ensureInsideTab();
   await ensureFreshTree();
 
-  if (args.length === 0) {
+  const pa = parseArgs(args);
+  const jsonMode = pa.flags.has("--json");
+  const targetName = pa.positional[0];
+
+  if (!targetName) {
     return "\x1b[31mUsage: cat <name> (see cat --help)\x1b[0m";
   }
 
-  const targetName = args[0];
   const currentId = getCurrentNodeId();
   const match = resolveByPath(currentId, targetName, nodeMap);
 
   if (!match) {
     return `\x1b[31mcat: ${targetName}: No such file or directory\x1b[0m`;
+  }
+
+  // JSON output mode
+  if (jsonMode) {
+    const obj: any = {
+      name: match.name,
+      role: match.role,
+      type: match.isDirectory ? "directory" : INTERACTIVE_ROLES.has(match.role) ? "interactive" : "static",
+      axNodeId: match.axNodeId,
+    };
+    if (match.value) obj.value = match.value;
+    if (match.isDirectory) {
+      obj.childCount = getChildVFSNodes(match.axNodeId, nodeMap).length;
+    }
+    if (match.backendDOMNodeId) {
+      obj.backendDOMNodeId = match.backendDOMNodeId;
+      try {
+        const props = await cdp.getElementProperties(match.backendDOMNodeId);
+        if (props.tag) obj.tag = props.tag;
+        if (props.href) obj.href = props.href;
+        if (props.src) obj.src = props.src;
+        if (props.id) obj.id = props.id;
+        if (props.class) obj.class = props.class;
+        if (props.alt) obj.alt = props.alt;
+        if (props.title) obj.title = props.title;
+        if (props.placeholder) obj.placeholder = props.placeholder;
+        if (props.name) obj.domName = props.name;
+        if (props.action) obj.action = props.action;
+        if (props.outerHTML) obj.html = props.outerHTML;
+      } catch { /* stale */ }
+      try {
+        const text = await cdp.getTextContent(match.backendDOMNodeId);
+        if (text.trim()) obj.text = text.trim();
+      } catch { /* stale */ }
+      try {
+        const visible = await cdp.getInnerText(match.backendDOMNodeId);
+        if (visible.trim() && visible.trim() !== (obj.text || "")) obj.visibleText = visible.trim();
+      } catch { /* stale */ }
+    }
+    return JSON.stringify(obj);
   }
 
   const tp = typePrefix(match);
@@ -2681,6 +2969,7 @@ async function handleFind(args: string[]): Promise<string> {
   await ensureFreshTree();
 
   const pa = parseArgs(args);
+  const jsonMode = pa.flags.has("--json");
   const typeFilter = pa.named["--type"]?.toLowerCase();
   const limit = pa.named["-n"] ? parseInt(pa.named["-n"], 10) : 0;
   const showMeta = pa.flags.has("--meta");
@@ -2701,7 +2990,38 @@ async function handleFind(args: string[]): Promise<string> {
 
   if (results.length === 0) {
     const desc = typeFilter ? `type '${typeFilter}'` : `'${pattern}'`;
+    if (jsonMode) return JSON.stringify({ results: [] });
     return `\x1b[33mNo matches for ${desc}\x1b[0m`;
+  }
+
+  // JSON output mode
+  if (jsonMode) {
+    const items: any[] = [];
+    for (const r of results) {
+      const item: any = {
+        path: r.path + r.node.name,
+        name: r.node.name,
+        role: r.node.role,
+        type: r.node.isDirectory ? "directory" : INTERACTIVE_ROLES.has(r.node.role) ? "interactive" : "static",
+      };
+      if (r.node.value) item.value = r.node.value;
+      if ((showMeta || jsonMode) && r.node.backendDOMNodeId) {
+        try {
+          const props = await cdp.getElementProperties(r.node.backendDOMNodeId);
+          if (props.href) item.href = props.href;
+          if (props.src) item.src = props.src;
+          if (props.id) item.id = props.id;
+          if (props.tag) item.tag = props.tag;
+        } catch { /* stale node */ }
+      }
+      if (showText && r.node.backendDOMNodeId) {
+        try {
+          item.text = await cdp.getInnerText(r.node.backendDOMNodeId);
+        } catch { /* stale node */ }
+      }
+      items.push(item);
+    }
+    return JSON.stringify({ results: items });
   }
 
   const lines: string[] = [];
@@ -3005,6 +3325,146 @@ async function handleWhoami(): Promise<string> {
 
 // ---- env / export ----
 
+function handleHistory(args: string[]): string {
+  if (args.length > 0 && args[0] === "clear") {
+    commandHistory = [];
+    persistState();
+    return "\x1b[32m✓ History cleared.\x1b[0m";
+  }
+
+  const pa = parseArgs(args);
+  const limit = pa.named["-n"] ? parseInt(pa.named["-n"], 10) : 20;
+
+  if (commandHistory.length === 0) {
+    return "\x1b[90m(no history)\x1b[0m";
+  }
+
+  const start = Math.max(0, commandHistory.length - limit);
+  const lines: string[] = [];
+  for (let i = start; i < commandHistory.length; i++) {
+    const num = String(i + 1).padStart(4, " ");
+    lines.push(`\x1b[90m${num}\x1b[0m  ${commandHistory[i]}`);
+  }
+  return lines.join("\r\n");
+}
+
+function handleBookmark(args: string[]): string {
+  const pa = parseArgs(args);
+
+  // bookmark --delete <name>
+  if (pa.flags.has("--delete") || pa.flags.has("-d")) {
+    const name = pa.positional[0];
+    if (!name) return "\x1b[31mbookmark: specify a name to delete\x1b[0m";
+    if (!bookmarks[name]) return `\x1b[31mbookmark: '@${name}' not found\x1b[0m`;
+    delete bookmarks[name];
+    persistState();
+    return `\x1b[32m✓ Bookmark '@${name}' deleted.\x1b[0m`;
+  }
+
+  // bookmark (no args) — list all
+  if (pa.positional.length === 0) {
+    const keys = Object.keys(bookmarks);
+    if (keys.length === 0) return "\x1b[90m(no bookmarks)\x1b[0m";
+    const lines: string[] = ["\x1b[1;36mBookmarks:\x1b[0m"];
+    for (const k of keys) {
+      lines.push(`  \x1b[32m@${k}\x1b[0m  →  ~/${bookmarks[k].join("/")}`);
+    }
+    return lines.join("\r\n");
+  }
+
+  const name = pa.positional[0];
+
+  // bookmark <name> <path> — save explicit path
+  if (pa.positional.length >= 2) {
+    let rawPath = pa.positional.slice(1).join(" ");
+    // Normalize: strip leading ~/ or /
+    rawPath = rawPath.replace(/^~\//, "").replace(/^\//, "");
+    const segments = rawPath.split("/").filter(Boolean);
+    bookmarks[name] = segments;
+    persistState();
+    return `\x1b[32m✓ Bookmark '@${name}' → ~/${segments.join("/")}\x1b[0m`;
+  }
+
+  // bookmark <name> — save current path
+  if (state.path.length === 0) {
+    return "\x1b[31mbookmark: cannot bookmark browser root (~). Navigate into a path first.\x1b[0m";
+  }
+  bookmarks[name] = [...state.path];
+  persistState();
+  return `\x1b[32m✓ Bookmark '@${name}' → ~/${state.path.join("/")}\x1b[0m`;
+}
+
+async function handleDiff(args: string[]): Promise<string> {
+  ensureInsideTab();
+  await ensureFreshTree();
+
+  const pa = parseArgs(args);
+  const jsonMode = pa.flags.has("--json");
+
+  if (!previousSnapshot) {
+    return "\x1b[33mNo snapshot available. A snapshot is automatically saved before each write/navigate command (click, type, submit, select, navigate, open, back, forward, scroll).\x1b[0m";
+  }
+
+  // Build current snapshot for comparison
+  const current = captureSnapshot();
+
+  // Compare: find added, removed, and changed nodes
+  const added: Array<{ id: string; entry: SnapshotEntry }> = [];
+  const removed: Array<{ id: string; entry: SnapshotEntry }> = [];
+  const changed: Array<{ id: string; prev: SnapshotEntry; curr: SnapshotEntry }> = [];
+
+  for (const [id, curr] of current) {
+    const prev = previousSnapshot.get(id);
+    if (!prev) {
+      added.push({ id, entry: curr });
+    } else if (prev.value !== curr.value || prev.childCount !== curr.childCount) {
+      changed.push({ id, prev, curr });
+    }
+  }
+  for (const [id, prev] of previousSnapshot) {
+    if (!current.has(id)) {
+      removed.push({ id, entry: prev });
+    }
+  }
+
+  const totalChanges = added.length + removed.length + changed.length;
+
+  if (totalChanges === 0) {
+    if (jsonMode) return JSON.stringify({ changes: 0, added: [], removed: [], changed: [] });
+    return "\x1b[32m✓ No changes detected.\x1b[0m";
+  }
+
+  if (jsonMode) {
+    return JSON.stringify({
+      changes: totalChanges,
+      added: added.slice(0, 50).map(a => ({ name: a.entry.name, role: a.entry.role, value: a.entry.value })),
+      removed: removed.slice(0, 50).map(r => ({ name: r.entry.name, role: r.entry.role, value: r.entry.value })),
+      changed: changed.slice(0, 50).map(c => ({ name: c.curr.name, role: c.curr.role, from: c.prev.value, to: c.curr.value })),
+    });
+  }
+
+  const lines: string[] = [];
+  lines.push(`\x1b[1;36mdiff: ${totalChanges} change${totalChanges !== 1 ? "s" : ""} detected\x1b[0m`);
+
+  for (const a of added.slice(0, 30)) {
+    lines.push(`  \x1b[32m+ ${a.entry.name}\x1b[0m \x1b[90m(${a.entry.role})\x1b[0m${a.entry.value ? ` "${a.entry.value.slice(0, 60)}"` : ""}`);
+  }
+  for (const r of removed.slice(0, 30)) {
+    lines.push(`  \x1b[31m- ${r.entry.name}\x1b[0m \x1b[90m(${r.entry.role})\x1b[0m${r.entry.value ? ` "${r.entry.value.slice(0, 60)}"` : ""}`);
+  }
+  for (const c of changed.slice(0, 20)) {
+    const fromVal = c.prev.value?.slice(0, 40) ?? "";
+    const toVal = c.curr.value?.slice(0, 40) ?? "";
+    lines.push(`  \x1b[33m~ ${c.curr.name}\x1b[0m \x1b[90m(${c.curr.role})\x1b[0m "${fromVal}" → "${toVal}"`);
+  }
+
+  if (added.length > 30 || removed.length > 30 || changed.length > 20) {
+    lines.push(`  \x1b[90m... (truncated, use --json for full output)\x1b[0m`);
+  }
+
+  return lines.join("\r\n");
+}
+
 function handleEnv(): string {
   return Object.entries(state.env)
     .map(([k, v]) => `\x1b[33m${k}\x1b[0m=${v}`)
@@ -3025,6 +3485,7 @@ function handleExport(args: string[]): string {
   const key = joined.slice(0, eqIndex).trim();
   const value = joined.slice(eqIndex + 1).trim();
   state.env[key] = value;
+  persistState();
 
   return `\x1b[32m\u2713 ${key}=${value}\x1b[0m`;
 }

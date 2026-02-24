@@ -595,15 +595,15 @@ Options:
 
 | Command | Description |
 |---|---|
-| `ls [options]` | List children (`-l`, `--meta`, `--text`, `-r`, `-n N`, `--offset N`, `--type ROLE`, `--count`, `--after NAME`, `--before NAME`) |
+| `ls [options]` | List children (`-l`, `--meta`, `--text`, `-r`, `-n N`, `--offset N`, `--type ROLE`, `--count`, `--after NAME`, `--before NAME`, `--json`) |
 | `cd <path>` | Navigate (`..`, `~` or `/` for browser root, `%here%` for focused tab, `main/form` for multi-level) |
 | `pwd` | Print current path (DOM path or browser path) |
 | `tree [depth]` | Tree view of current node (default depth: 2) |
-| `cat <name>` | Full element metadata: AX info + DOM properties (tag, href, src, id, class, outerHTML) |
+| `cat <name> [--json]` | Full element metadata: AX info + DOM properties (tag, href, src, id, class, outerHTML) |
 | `text [name] [-n N] [--links]` | Bulk extract all text from a section (`--links` inlines URLs as `[text](url)`) |
 | `read [name] [opts]` | Structured subtree extraction (`--meta`, `--text`, `-d N` depth) — tree + content in one call |
 | `grep [opts] <pattern>` | Search by name/role/value (`-r` recursive, `--content` match visible text, `-n N` limit) |
-| `find [opts] <pattern>` | Deep recursive search (`--type ROLE` with fuzzy aliases: input, dropdown, nav, toggle, modal, image, etc.; `--meta`, `--text`, `--content`, `-n N`) |
+| `find [opts] <pattern>` | Deep recursive search (`--type ROLE` with fuzzy aliases: input, dropdown, nav, toggle, modal, image, etc.; `--meta`, `--text`, `--content`, `-n N`, `--json`) |
 | `extract_links [name]` | Extract all links as `[text](url)` format (`-n N` limit) |
 | `extract_table <name>` | Extract table as markdown or CSV (`--format csv`, `-n N` row limit) |
 | `click <name>` | Click an element (falls back to coordinate-based click) |
@@ -616,6 +616,8 @@ Options:
 | `screenshot` | Capture a PNG screenshot of the current tab (returns image via MCP, base64 in shell) |
 | `select <name> <value>` | Select a dropdown option by value or visible text (dispatches change/input events) |
 | `wait <pattern> [--type ROLE] [--timeout N]` | Wait for an element matching pattern to appear (polls AX tree, default 5s timeout, max 30s) |
+| `eval <expr>` | Evaluate a JS expression (read-only, no `--allow-write` needed). Same as `js` but Read tier. |
+| `diff [--json]` | Compare AX tree against pre-action snapshot. Shows added/removed/changed elements after click/submit/navigate. |
 | `refresh` | Force re-fetch the Accessibility Tree |
 
 ### System
@@ -625,6 +627,8 @@ Options:
 | `whoami` | Check session/auth cookies for the current page |
 | `env` | Show environment variables |
 | `export K=V` | Set an environment variable |
+| `history [-n N]` | Show command history. `history clear` to reset. `!N` to recall command N. |
+| `bookmark [name] [path]` | Save/list named paths. `bookmark inbox` saves current path. `cd @inbox` jumps back. `bookmark --delete name` removes. |
 | `debug [sub]` | Inspect raw AX tree (`stats`, `raw`, `node <id>`) |
 | `connect <token>` | Connect to an MCP server via WebSocket bridge |
 | `disconnect` | Disconnect from the MCP server, clear token |
@@ -896,7 +900,7 @@ The MCP server is hardened with multiple layers of security. **By default, it's 
 
 | Tier | Commands | Default | Enable With |
 |------|----------|---------|-------------|
-| **Read** | `ls`, `cd`, `pwd`, `cat`, `text`, `grep`, `find`, `tree`, `refresh`, `tabs`, `windows`, `here`, `screenshot`, `wait` | Enabled | *(always on)* |
+| **Read** | `ls`, `cd`, `pwd`, `cat`, `text`, `grep`, `find`, `tree`, `refresh`, `tabs`, `windows`, `here`, `screenshot`, `wait`, `eval`, `diff`, `history`, `bookmark` | Enabled | *(always on)* |
 | **Navigate** | `navigate`, `goto`, `open`, `back`, `forward` | **Disabled** | `--allow-write` |
 | **Write** | `click`, `focus`, `type`, `scroll`, `js`, `select`, `close` | **Disabled** | `--allow-write` |
 | **Sensitive** | `whoami` (exposes cookies) | **Disabled** | `--allow-sensitive` |
@@ -995,6 +999,8 @@ dom@shell:$ disconnect
 | `domshell_screenshot` | `screenshot` (capture tab as PNG image) | Read |
 | `domshell_select` | `select <name> <value>` (dropdown selection) | Write |
 | `domshell_wait` | `wait <pattern> [--type ROLE] [--timeout N]` (wait for element) | Read |
+| `domshell_eval` | `eval <expression>` (read-only JS evaluation, no `--allow-write` needed) | Read |
+| `domshell_diff` | `diff [--json]` (compare tree against pre-action snapshot) | Read |
 | `domshell_whoami` | `whoami` | Sensitive |
 | `domshell_execute` | *(any command)* | Varies |
 
@@ -1010,7 +1016,7 @@ dom@shell:$ disconnect
 ### New Commands
 
 - [ ] **`watch` / `cron`** — periodic re-execution of a command (e.g. `watch ls` to poll for DOM changes, `cron "5s" "text main"` to sample content)
-- [ ] **`history`** — command history with recall (`history`, `!n` to re-run)
+- [x] **`history`** — command history with recall (`history`, `!n` to re-run)
 - [x] **`back` / `forward`** — browser-style history navigation within the current tab
 - [x] **`close`** — close the current tab (`close` or `close <tab-id>`)
 - [x] **`screenshot`** — capture a screenshot of the current tab (useful for visual verification alongside AX tree inspection)
@@ -1025,7 +1031,7 @@ dom@shell:$ disconnect
 
 - [x] **`js` command** — execute arbitrary JavaScript in the tab context and return the result
 - [ ] **JS functions as executables** — expose page-level JavaScript functions as "files" in a virtual `/js/` or `/functions/` directory; `ls /js/` lists callable functions, `cat /js/fetchData` shows the signature, and running `/js/fetchData --arg1 value` executes it with arguments
-- [ ] **`eval <expr>`** — quick expression evaluation (e.g. `eval document.title`, `eval window.location.href`)
+- [x] **`eval <expr>`** — quick expression evaluation (e.g. `eval document.title`, `eval window.location.href`)
 
 ### Agent Ergonomics
 
@@ -1037,11 +1043,11 @@ dom@shell:$ disconnect
 - [x] **`--links` flag on `text`** — include hyperlink URLs inline as markdown `[text](url)` in text output; extracts both content and link destinations in a single call (e.g. `text --links main/paragraph`)
 - [x] **Fuzzy type aliases for `find`** — `find --type` accepts natural-language aliases (input, dropdown, nav, toggle, modal, image, btn, sidebar, etc.) that expand to matching AX roles — eliminates wasted tool calls from guessing exact role names
 - [ ] **Visible text inheritance** — pre-compute visible text from descendant nodes and cache on VFS nodes for fast content-based search without per-node CDP calls
-- [ ] **`bookmark` / `alias`** — save named paths for quick navigation (e.g. `bookmark inbox ~/tabs/gmail/main/inbox_list`)
+- [x] **`bookmark` / `alias`** — save named paths for quick navigation (e.g. `bookmark inbox ~/tabs/gmail/main/inbox_list`, `cd @inbox`)
 - [ ] **Multi-tab operations** — run a command across multiple tabs (e.g. `each tab text main` to extract text from every open tab)
-- [ ] **Structured output mode** — `--json` flag on commands for machine-parseable output (e.g. `ls --json`, `cat --json`)
-- [ ] **Session persistence** — save and restore shell state (path, env vars, bookmarks) across extension reloads
-- [ ] **`diff`** — compare two AX tree snapshots to see what changed after an action
+- [x] **Structured output mode** — `--json` flag on commands for machine-parseable output (e.g. `ls --json`, `cat --json`, `find --json`, `diff --json`)
+- [x] **Session persistence** — save and restore shell state (path, env vars, bookmarks, history) across service worker restarts via `chrome.storage.local`
+- [x] **`diff`** — compare AX tree snapshots to see what changed after an action (auto-snapshots before click/submit/navigate)
 
 ### Platform
 

@@ -287,8 +287,11 @@ WHEN TO USE DOMSHELL (prefer over native browser tools):
 - Getting URLs/hrefs: domshell_cat on a link shows its URL, or domshell_find with --meta --type link
 - Scrolling to see more content: domshell_scroll down/up, or scroll a specific element into view
 - Complex DOM queries: domshell_js for CSS selectors, batch extraction, or computed values
+- Read-only JS queries: domshell_eval for expression evaluation without --allow-write (e.g. document.title, element counts)
 - Interacting: domshell_click, domshell_focus, domshell_type, domshell_select (dropdowns)
 - Waiting for dynamic content: domshell_wait to poll for elements on SPA/AJAX pages
+- Detecting changes: domshell_diff after clicks/submissions to see what was added, removed, or changed in the DOM
+- Saving locations: bookmark paths with domshell_execute "bookmark name", jump back with domshell_cd "@name"
 
 TYPICAL WORKFLOW:
 1. Enter a tab: domshell_here (focused tab), domshell_cd with "%here%" (composable), or domshell_open (new tab)
@@ -299,8 +302,9 @@ TYPICAL WORKFLOW:
 6. Inspect element details: domshell_cat shows full metadata — AX role, DOM tag, href/src/id/class, text, outerHTML
 7. Interact: domshell_click, domshell_focus + domshell_type, domshell_select (dropdowns)
 8. Advanced extraction: domshell_js for batch DOM queries (e.g. extract all comments in one call via CSS selectors)
-9. Navigate back: domshell_back to return to previous page (faster than re-navigating, preserves browser history)
-10. Clean up: domshell_close to close tabs when done extracting
+9. Detect changes: domshell_diff after clicks/submissions to see exactly what changed (added/removed/modified elements)
+10. Navigate back: domshell_back to return to previous page (faster than re-navigating, preserves browser history)
+11. Clean up: domshell_close to close tabs when done extracting
 
 BROWSER HIERARCHY:
 - "~" or "/" = browser root. "ls" shows windows/ and tabs/.
@@ -335,6 +339,11 @@ IMPORTANT TIPS:
 - Use domshell_screenshot on unfamiliar pages to see the layout before starting extraction — one visual can replace multiple exploration calls.
 - Use domshell_wait after clicks/navigation that trigger async content loading (SPAs, AJAX) instead of retry loops with refresh + find.
 - Use domshell_select for <select> dropdowns instead of js-based workarounds.
+- Use domshell_eval for read-only JS queries (document.title, element counts) — always available, no --allow-write needed. Use domshell_js for DOM-mutating operations.
+- Use --json flag via domshell_execute for machine-parseable output (e.g. "ls --json", "cat --json name", "find --json --type link").
+- Use domshell_diff after clicks/submissions to see what changed — replaces re-exploration with ls/find.
+- Save frequently-visited paths with domshell_execute "bookmark name", then jump back with domshell_cd "@name".
+- Shell state (path, env, bookmarks, history) persists across service worker restarts — no need to re-navigate after extension reloads.
 - The AXTree auto-refreshes after clicks/navigation — no manual refresh needed.
 
 EFFICIENT PATTERNS:
@@ -350,6 +359,9 @@ EFFICIENT PATTERNS:
 10. Multi-page Navigation: open page1 → extract → navigate page2 → extract → back (returns to page1 via browser history). Use back instead of re-navigating — it's faster and preserves scroll position.
 11. Visual-first Exploration: screenshot (see layout) → js (targeted extraction based on what you see). Replaces tree → ls → find exploration on unfamiliar sites.
 12. Dynamic Content: click button → wait results_list → text results_list. Use wait instead of refresh + find retry loops.
+13. Change Detection: click button → diff → extract new content. Diff shows exactly what appeared/disappeared.
+14. Bookmarked Paths: bookmark inbox → (work elsewhere) → cd @inbox to jump back. Saves re-navigation in multi-tab workflows.
+15. Structured Output: ls --json, cat --json name, find --json --type link for machine-parseable JSON. Eliminates text parsing.
 
 COMMAND CHAINING (grep is the linchpin):
 grep discovers sections and elements by name, giving you paths for subsequent commands. Chain pattern: grep (locate) → cd (scope) → extract (read/find/text). Examples:
@@ -386,6 +398,8 @@ ANTI-PATTERNS (avoid these):
 - Do NOT use multiple ls/find calls to understand an unfamiliar page layout — use screenshot first for instant visual orientation, then targeted extraction
 - Do NOT poll with repeated find calls for dynamic content — use wait <pattern> to block until the element appears
 - Do NOT use js to set dropdown values — use select <name> <value> for proper event dispatch
+- Do NOT re-explore with ls/find after a click/submit — use diff to see exactly what changed
+- Do NOT use domshell_js for read-only queries when domshell_eval is available — eval works without --allow-write
 
 Note: Use --no-confirm when starting the server to skip interactive confirmation prompts for write actions.`;
 
@@ -550,6 +564,24 @@ function createMcpServer(): McpServer {
     {},
     async () => ({
       content: [{ type: "text", text: await executeWithSecurity("refresh") }],
+    })
+  );
+
+  server.tool(
+    "domshell_diff",
+    "Compare the current AX tree against the snapshot taken before the last write/navigate action (click, type, submit, select, navigate, open, back, forward, scroll). Shows added, removed, and changed elements. Use after a click or form submission to see exactly what changed on the page instead of re-exploring with ls/find.",
+    {},
+    async () => ({
+      content: [{ type: "text", text: await executeWithSecurity("diff --json") }],
+    })
+  );
+
+  server.tool(
+    "domshell_eval",
+    "Evaluate a JavaScript expression in the tab context (read-only). Returns the result. Unlike domshell_js (which requires --allow-write), eval is always available in read-only mode. Use for extracting data without write permission.\n\nExamples:\n  eval document.title\n  eval window.location.href\n  eval document.querySelectorAll('a').length\n  eval [...document.querySelectorAll('h2')].map(h => h.textContent)",
+    { expression: z.string().describe("JavaScript expression to evaluate") },
+    async ({ expression }) => ({
+      content: [{ type: "text", text: await executeWithSecurity(`eval ${expression}`) }],
     })
   );
 

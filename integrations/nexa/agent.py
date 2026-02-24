@@ -47,6 +47,7 @@ READ_TOOLS = {
     "domshell_find", "domshell_grep", "domshell_tree",
     "domshell_extract_links", "domshell_extract_table",
     "domshell_refresh", "domshell_screenshot", "domshell_wait",
+    "domshell_eval", "domshell_diff",
     "domshell_execute",
 }
 
@@ -70,7 +71,7 @@ TOOL_ALIASES = {
     "whoami": "domshell_whoami", "back": "domshell_back",
     "forward": "domshell_forward", "close": "domshell_close",
     "screenshot": "domshell_screenshot", "select": "domshell_select",
-    "wait": "domshell_wait",
+    "wait": "domshell_wait", "eval": "domshell_eval", "diff": "domshell_diff",
 }
 
 # ---------------------------------------------------------------------------
@@ -93,16 +94,21 @@ find [pattern], find --type TYPE (aliases: input, dropdown, nav, toggle, modal, 
 grep <pattern>, text [name], text --links [name], cat <name>, extract_links, \
 extract_table <name>, click <name>, focus <name>, type <text>, submit <input> <value>, \
 select <name> <value>, scroll down [N], scroll up [N], scroll <element_name>, \
-screenshot, wait <pattern> [--timeout N], \
-js <code> (execute JavaScript in tab, returns result)
+screenshot, wait <pattern> [--timeout N], diff [--json], \
+eval <expr> (read-only JS evaluation), js <code> (execute JavaScript in tab), \
+history [-n N], bookmark [name] [path], bookmark --delete <name>
 
 WORKFLOW: tabs → open URL → cd section → text to read content.
 Use "text --links <name>" to get text with link URLs inline as [text](url).
 Use "scroll down" to see below-the-fold content, "scroll element_name" to jump to a section.
 Use "js <code>" for batch DOM queries (e.g. extract all items with CSS selectors in one call).
+Use "eval <expr>" for read-only JS queries (document.title, element counts) — no write permission needed.
 Use "back" to return to previous page (faster than navigate, uses browser cache).
 Use "screenshot" on unfamiliar pages — see the layout instantly, then extract with js or text.
 Use "wait <pattern>" for dynamic content that loads after actions.
+Use "diff" after clicks/submissions to see what changed. Use "diff --json" for machine-parseable output.
+Use "--json" flag on ls, cat, find for structured JSON output.
+Use "bookmark name" to save current path, "cd @name" to jump back.
 
 When done, respond in plain text (no JSON)."""
 
@@ -121,9 +127,11 @@ TYPICAL WORKFLOW:
 6. Inspect details: domshell_cat shows full metadata — AX role, DOM tag, href, src, id, class, outerHTML
 7. Interact: domshell_click, domshell_focus + domshell_type, domshell_submit (atomic form fill), or select (dropdowns)
 8. Advanced extraction: domshell_js for batch DOM queries via CSS selectors (one call replaces many)
-9. Navigate back: use back/forward for browser history — faster than navigate, uses browser cache
-10. Dynamic content: use wait <pattern> to block until an element appears after actions
-11. Tab cleanup: use close to close tabs when done with multi-tab workflows
+9. Read-only JS: use eval for expression evaluation (document.title, element counts) — no write permission needed
+10. Detect changes: use diff after clicks/submissions to see what was added, removed, or changed
+11. Navigate back: use back/forward for browser history — faster than navigate, uses browser cache
+12. Dynamic content: use wait <pattern> to block until an element appears after actions
+13. Tab cleanup: use close to close tabs when done with multi-tab workflows
 
 BROWSER HIERARCHY:
 - "~" or "/" = browser root. "ls" shows windows/ and tabs/.
@@ -145,6 +153,9 @@ EFFICIENT PATTERNS:
 11. Multi-page navigation: open → extract → back (browser cache, no URL tracking needed)
 12. Visual-first exploration: screenshot on unfamiliar pages → see layout → targeted js/text extraction
 13. Dynamic content: click/submit → wait <pattern> → extract (no manual polling)
+14. Change detection: click button → diff → extract new content (see exactly what appeared/disappeared)
+15. Bookmarked paths: bookmark inbox → (work elsewhere) → cd @inbox to jump back
+16. Structured output: ls --json, cat --json name, find --json --type link for machine-parseable JSON
 
 COMMAND CHAINING:
 grep discovers sections → cd scopes context → text/find/extract extracts content.
@@ -159,6 +170,8 @@ ANTI-PATTERNS:
 - Do NOT use navigate to go back — use back instead (instant, uses browser cache)
 - Do NOT use multiple ls/find to explore unfamiliar pages — use screenshot first
 - Do NOT poll with repeated find for dynamic content — use wait <pattern>
+- Do NOT re-explore with ls/find after a click/submit — use diff to see what changed
+- Do NOT use js for read-only queries — use eval instead (works without write permission)
 
 When you have enough information to answer the user's question, respond in natural \
 language WITHOUT a function call. The conversation ends when you give a plain text answer."""

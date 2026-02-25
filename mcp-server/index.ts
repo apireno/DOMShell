@@ -292,12 +292,12 @@ WHEN TO USE DOMSHELL (prefer over native browser tools):
 - Waiting for dynamic content: domshell_wait to poll for elements on SPA/AJAX pages
 - Detecting changes: domshell_diff after clicks/submissions to see what was added, removed, or changed in the DOM
 - Saving locations: bookmark paths with domshell_execute "bookmark name", jump back with domshell_cd "@name"
-- Discovering page functions: domshell_execute "functions pattern" lists callable window functions
-- Calling page functions: domshell_execute "call funcName arg1 arg2" invokes a global function (write-tier)
-- Monitoring changes: domshell_execute "watch ls --times 3 --interval 1" re-runs a command periodically. Use --until-change to stop when output changes.
-- Batch operations on output: domshell_execute 'for "find --type heading -n 3" : text {}' iterates over lines
-- Reusable workflows: domshell_execute "script save name cmd1 ; cmd2" then "script run name arg1 arg2" ($1, $2 replaced)
-- Cross-tab operations: domshell_execute "each --pattern wiki text" runs a command in every matching tab
+- Discovering page functions: domshell_functions to list callable window functions (optionally filter by pattern)
+- Calling page functions: domshell_call to invoke a global function (write-tier)
+- Monitoring changes: domshell_watch to re-run a command periodically. Use --until-change to stop when output changes.
+- Batch operations on output: domshell_for to iterate over command output lines, replacing {} in a template
+- Reusable workflows: domshell_script to save and run multi-command scripts with $1, $2 variable substitution
+- Cross-tab operations: domshell_each to run a command in every matching tab
 
 TYPICAL WORKFLOW:
 1. Enter a tab: domshell_here (focused tab), domshell_cd with "%here%" (composable), or domshell_open (new tab)
@@ -308,7 +308,7 @@ TYPICAL WORKFLOW:
 6. Inspect element details: domshell_cat shows full metadata — AX role, DOM tag, href/src/id/class, text, outerHTML
 7. Interact: domshell_click, domshell_focus + domshell_type, domshell_select (dropdowns)
 8. Advanced extraction: domshell_js for batch DOM queries (e.g. extract all comments in one call via CSS selectors)
-8b. Discover page APIs: domshell_execute "functions [pattern]" to find callable JS functions. Use domshell_eval "mw.config.get(...)" to access discovered APIs.
+8b. Discover page APIs: domshell_functions to find callable JS functions. Use domshell_eval "mw.config.get(...)" to access discovered APIs.
 9. Detect changes: domshell_diff after clicks/submissions to see exactly what changed (added/removed/modified elements)
 10. Navigate back: domshell_back to return to previous page (faster than re-navigating, preserves browser history)
 11. Clean up: domshell_close to close tabs when done extracting
@@ -351,11 +351,11 @@ IMPORTANT TIPS:
 - Use domshell_diff after clicks/submissions to see what changed — replaces re-exploration with ls/find.
 - Save frequently-visited paths with domshell_execute "bookmark name", then jump back with domshell_cd "@name".
 - Shell state (path, env, bookmarks, scripts, history) persists across service worker restarts — no need to re-navigate after extension reloads.
-- Use domshell_execute "functions pattern" to discover callable JS functions on the page. Use domshell_execute "call funcName args" to invoke them.
-- Use domshell_execute "watch cmd --times N --interval N" to monitor changes by re-running a command periodically. Add --until-change to stop early when output differs.
-- Use domshell_execute "for source-cmd : action-template" to iterate over command output — {} is replaced with each line.
-- Use domshell_execute "script save name cmd1 ; cmd2 ; cmd3" to save reusable workflows. Run with "script run name arg1 arg2" — $1, $2 are replaced with args.
-- Use domshell_execute "each --pattern filter cmd" to run a command across multiple tabs in one call.
+- Use domshell_functions to discover callable JS functions on the page. Use domshell_call to invoke them (write-tier).
+- Use domshell_watch to monitor changes by re-running a command periodically. Add --until-change to stop early when output differs.
+- Use domshell_for to iterate over command output — {} in the template is replaced with each line.
+- Use domshell_script to save reusable workflows. Run with "run name arg1 arg2" — $1, $2 are replaced with args.
+- Use domshell_each to run a command across multiple tabs in one call (optionally --pattern filter).
 - The AXTree auto-refreshes after clicks/navigation — no manual refresh needed.
 
 EFFICIENT PATTERNS:
@@ -384,7 +384,7 @@ MULTI-STEP AUTOMATION PATTERNS (combine Sprint 3 features for maximum efficiency
 - Multi-tab extract: open URL1 → open URL2 → each --pattern filter eval <JS> (one call extracts from all matching tabs)
 - Discover-and-visit: for "eval [...links].map(a=>a.href).join('\\n')" : open {} (opens N tabs from discovered URLs in one call)
 - Bulk iteration: for "find --type heading -n 5" : cat {} (runs a command on each discovered element)
-- Save & replay with args: script save name cmd1 ; cmd2 → script run name arg1 ($1 replaced with arg1)
+- Save & replay with args: script save name cmd1 ; cmd2 → script run name "arg1" ($1 replaced with arg1). IMPORTANT: quote multi-word args: script run search "Artificial intelligence" (NOT script run search Artificial intelligence)
 - Monitor until change: watch "eval element.textContent" --until-change --interval 1 (returns when value changes, not after N iterations)
 - Discover-visit-extract pipeline: open page → for "eval [URLs]" : open {} → each --pattern filter eval <JS> (3 calls replaces 2N+1)
 
@@ -616,6 +616,62 @@ function createMcpServer(): McpServer {
   );
 
   server.tool(
+    "domshell_functions",
+    "List callable global JavaScript functions on the current page. Shows function name, arity (parameter count), and parameter names. Useful for discovering page APIs (e.g. MediaWiki's mw.config.get on Wikipedia).\n\nExamples:\n  functions             All non-standard window functions\n  functions mw          Functions matching 'mw'\n  functions --json      Machine-parseable output",
+    {
+      pattern: z.string().optional().describe("Filter functions by name pattern (case-insensitive substring match)"),
+      json: z.boolean().optional().describe("Return JSON output instead of formatted text"),
+    },
+    async ({ pattern, json }) => {
+      let cmd = "functions";
+      if (pattern) cmd += ` ${pattern}`;
+      if (json) cmd += " --json";
+      return { content: [{ type: "text", text: await executeWithSecurity(cmd) }] };
+    }
+  );
+
+  server.tool(
+    "domshell_watch",
+    "Re-run a command periodically and collect results. Useful for monitoring dynamic content changes within a single tool call instead of making N separate calls.\n\nOptions:\n  --interval N      Seconds between runs (default: 2, min: 0.5)\n  --times N         Number of iterations (default: 5, max: 100)\n  --until-change    Stop early when output differs from previous iteration\n\nTotal runtime capped at 28 seconds.\n\nExamples:\n  watch ls --times 3 --interval 1\n  watch \"eval document.title\" --until-change --interval 1",
+    { command: z.string().describe("The command to re-run periodically (e.g. 'ls', 'eval document.title')") },
+    async ({ command }) => ({
+      content: [{ type: "text", text: await executeWithSecurity(`watch ${command}`) }],
+    })
+  );
+
+  server.tool(
+    "domshell_for",
+    "Iterate over command output lines. Runs a source command, splits output into lines, and for each line replaces {} in the action template and executes it. Capped at 50 items and 28 seconds.\n\nSeparator is ' : ' (space-colon-space) to avoid conflicts with URL colons.\n\nExamples:\n  for \"find --type heading -n 3\" : text {}\n  for \"eval [...urls].join('\\\\n')\" : open {}",
+    {
+      source: z.string().describe("Source command whose output lines become iteration items"),
+      template: z.string().describe("Action template with {} placeholder replaced by each line"),
+    },
+    async ({ source, template }) => ({
+      content: [{ type: "text", text: await executeWithSecurity(`for ${source} : ${template}`) }],
+    })
+  );
+
+  server.tool(
+    "domshell_script",
+    "Save and run multi-command scripts. Scripts persist across service worker restarts.\n\nSubcommands:\n  script list                    List saved scripts\n  script save <name> cmd1 ; cmd2 Save commands (separated by ' ; ')\n  script show <name>             Show commands in a script\n  script run <name> [args...]    Execute with $1, $2 variable substitution\n  script delete <name>           Delete a script\n\nIMPORTANT: Multi-word arguments for 'script run' MUST be quoted with double quotes:\n  script run search \"Artificial intelligence\"     (correct: $1 = Artificial intelligence)\n  script run search Artificial intelligence        (WRONG: $1 = Artificial, $2 = intelligence)\n\nExamples:\n  script save search open https://en.wikipedia.org ; submit search_input $1\n  script run search \"machine learning\"\n  script run search \"deep learning\"",
+    { command: z.string().describe("Script subcommand and arguments. IMPORTANT: quote multi-word args with double quotes (e.g. 'run myscraper \"Artificial intelligence\"', 'save extract open url ; text', 'list')") },
+    async ({ command }) => ({
+      content: [{ type: "text", text: await executeWithSecurity(`script ${command}`) }],
+    })
+  );
+
+  server.tool(
+    "domshell_each",
+    "Run a command across multiple open tabs. Iterates over all non-chrome tabs (optionally filtered by title/URL pattern), switches into each, runs the command, and collects results. Restores the original tab when done.\n\nOptions:\n  --pattern FILTER  Only tabs whose title or URL contains FILTER\n  --limit N         Process at most N matching tabs\n\nExamples:\n  each eval document.title                         Title from every tab\n  each --pattern wiki eval document.title           Only Wikipedia tabs\n  each --pattern wiki --limit 3 eval document.title First 3 Wikipedia tabs",
+    {
+      command: z.string().describe("The command to run in each tab, optionally prefixed with --pattern FILTER and/or --limit N"),
+    },
+    async ({ command }) => ({
+      content: [{ type: "text", text: await executeWithSecurity(`each ${command}`) }],
+    })
+  );
+
+  server.tool(
     "domshell_extract_links",
     "Extract all links under the current directory or a named child as a clean numbered list in [text](url) format. Purpose-built for link extraction — returns display text and URLs in one call.\n\nExamples:\n  extract_links              All links under current directory\n  extract_links main -n 20   First 20 links in 'main' section",
     {
@@ -812,6 +868,20 @@ function createMcpServer(): McpServer {
         return { content: [{ type: "text", text: await executeWithSecurity(cmd) }] };
       }
     );
+
+    server.tool(
+      "domshell_call",
+      "Call a global JavaScript function by name. Arguments are auto-parsed as JSON if valid, otherwise passed as strings. Write-tier — requires --allow-write.\n\nExamples:\n  call getCount\n  call getMessage Agent\n  call resetCount\n  call setConfig {\"key\": \"value\"}",
+      {
+        functionName: z.string().describe("Name of the global function to call (e.g. 'getCount', 'getMessage')"),
+        args: z.string().optional().describe("Space-separated arguments to pass to the function"),
+      },
+      async ({ functionName, args }) => {
+        let cmd = `call ${functionName}`;
+        if (args) cmd += ` ${args}`;
+        return { content: [{ type: "text", text: await executeWithSecurity(cmd) }] };
+      }
+    );
   }
 
   // -- Sensitive tier tools (require --allow-sensitive) --
@@ -838,6 +908,7 @@ function createMcpServer(): McpServer {
     })
   );
 
+  console.error("[DOMShell] MCP server created with all tool registrations");
   return server;
 }
 
@@ -912,6 +983,7 @@ async function main() {
 
         const server = createMcpServer();
         await server.connect(transport);
+        console.error(`[DOMShell] New MCP session connected (sid: ${sessionId})`);
         await transport.handleRequest(req, res, req.body);
         return;
       }

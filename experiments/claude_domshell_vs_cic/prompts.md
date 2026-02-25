@@ -38,6 +38,7 @@ RULES — read these first:
 - Be fast and direct. Minimize unnecessary tool calls.
 - If you are still working after 15 tool calls, wrap up immediately with whatever you have.
 - Return partial results rather than nothing.
+- When done, close all tabs you opened during this task to keep the browser clean for the next task.
 
 TASK:
 Go to https://en.wikipedia.org/wiki/Artificial_intelligence. Extract the first paragraph of the article body (not the sidebar or infobox). Then list the first 10 hyperlinks in the article body with their display text and full URLs.
@@ -63,6 +64,7 @@ RULES — read these first:
 - Be fast and direct. Minimize unnecessary tool calls.
 - If you are still working after 15 tool calls, wrap up immediately with whatever you have.
 - Return partial results rather than nothing.
+- When done, close all tabs you opened during this task to keep the browser clean for the next task.
 
 TASK:
 Go to https://en.wikipedia.org/wiki/Artificial_intelligence. Extract the first paragraph of the article body (not the sidebar or infobox). Then list the first 10 hyperlinks in the article body with their display text and full URLs.
@@ -92,6 +94,7 @@ RULES — read these first:
 - Be fast and direct. Minimize unnecessary tool calls.
 - If you are still working after 20 tool calls, wrap up immediately with whatever you have.
 - Return partial results rather than nothing.
+- When done, close all tabs you opened during this task to keep the browser clean for the next task.
 
 TASK:
 Go to https://en.wikipedia.org. Search for "machine learning" using the search box. On the results page, click the first result. Then extract the first paragraph of the article and list all items in the "See also" section.
@@ -117,6 +120,7 @@ RULES — read these first:
 - Be fast and direct. Minimize unnecessary tool calls.
 - If you are still working after 20 tool calls, wrap up immediately with whatever you have.
 - Return partial results rather than nothing.
+- When done, close all tabs you opened during this task to keep the browser clean for the next task.
 
 TASK:
 Go to https://en.wikipedia.org. Search for "machine learning" using the search box. On the results page, click the first result. Then extract the first paragraph of the article and list all items in the "See also" section.
@@ -146,6 +150,7 @@ RULES — read these first:
 - Be fast and direct. Minimize unnecessary tool calls.
 - If you are still working after 25 tool calls, wrap up immediately with whatever you have.
 - Return partial results rather than nothing.
+- When done, close all tabs you opened during this task to keep the browser clean for the next task.
 
 TASK:
 Go to https://en.wikipedia.org/wiki/Large_language_model. Find the table or list of large language models. Extract the names and organizations of the first 5 models listed. Then follow the Wikipedia link for the first model in the list and extract the first paragraph of that model's page.
@@ -175,6 +180,7 @@ RULES — read these first:
 - Be fast and direct. Minimize unnecessary tool calls.
 - If you are still working after 25 tool calls, wrap up immediately with whatever you have.
 - Return partial results rather than nothing.
+- When done, close all tabs you opened during this task to keep the browser clean for the next task.
 
 TASK:
 Go to https://en.wikipedia.org/wiki/Large_language_model. Find the table or list of large language models. Extract the names and organizations of the first 5 models listed. Then follow the Wikipedia link for the first model in the list and extract the first paragraph of that model's page.
@@ -208,6 +214,7 @@ RULES — read these first:
 - Be fast and direct. Minimize unnecessary tool calls.
 - If you are still working after 20 tool calls, wrap up immediately with whatever you have.
 - Return partial results rather than nothing.
+- When done, close all tabs you opened during this task to keep the browser clean for the next task.
 
 TASK:
 Go to https://news.ycombinator.com/. Extract the title, URL, and point count of stories ranked #1 and #30 on the front page. Then click "More" at the bottom to go to page 2 and extract the title and URL of the first story (ranked #31). Finally, go back to page 1, navigate to the comments page of story #1, and extract the username and first sentence of the top 3 comments.
@@ -246,6 +253,7 @@ RULES — read these first:
 - Be fast and direct. Minimize unnecessary tool calls.
 - If you are still working after 20 tool calls, wrap up immediately with whatever you have.
 - Return partial results rather than nothing.
+- When done, close all tabs you opened during this task to keep the browser clean for the next task.
 
 TASK:
 Go to https://news.ycombinator.com/. Extract the title, URL, and point count of stories ranked #1 and #30 on the front page. Then click "More" at the bottom to go to page 2 and extract the title and URL of the first story (ranked #31). Finally, go back to page 1, navigate to the comments page of story #1, and extract the username and first sentence of the top 3 comments.
@@ -302,6 +310,7 @@ RULES — read these first:
 - Be fast and direct. Minimize unnecessary tool calls.
 - If you are still working after 15 tool calls, wrap up with whatever you have.
 - Return partial results rather than nothing.
+- When done, close all tabs you opened during this task to keep the browser clean for the next task.
 
 HINT: After opening multiple tabs, use "each --pattern wiki eval <JS>" to run
 the same extraction across all Wikipedia tabs in ONE tool call instead of
@@ -350,6 +359,7 @@ RULES — read these first:
 - Be fast and direct. Minimize unnecessary tool calls.
 - If you are still working after 15 tool calls, wrap up with whatever you have.
 - Return partial results rather than nothing.
+- When done, close all tabs you opened during this task to keep the browser clean for the next task.
 
 TASK:
 Navigate to these 3 Wikipedia articles one at a time:
@@ -398,6 +408,7 @@ RULES — read these first:
 - Be fast and direct. Minimize unnecessary tool calls.
 - If you are still working after 20 tool calls, wrap up with whatever you have.
 - Return partial results rather than nothing.
+- When done, close all tabs you opened during this task to keep the browser clean for the next task.
 
 HINT: Use "for" to open multiple URLs in one call:
   for "eval [...document.querySelectorAll('#See_also ~ ul a')].slice(0,5).map(a=>a.href).join('\n')" : open {}
@@ -429,6 +440,7 @@ RULES — read these first:
 - Be fast and direct. Minimize unnecessary tool calls.
 - If you are still working after 20 tool calls, wrap up with whatever you have.
 - Return partial results rather than nothing.
+- When done, close all tabs you opened during this task to keep the browser clean for the next task.
 
 TASK:
 Go to https://en.wikipedia.org/wiki/Artificial_intelligence. Find the "See also"
@@ -460,6 +472,7 @@ RULES — read these first:
 - Be fast and direct. Minimize unnecessary tool calls.
 - If you are still working after 15 tool calls, wrap up with whatever you have.
 - Return partial results rather than nothing.
+- When done, close all tabs you opened during this task to keep the browser clean for the next task.
 
 HINT: Use "functions" to discover callable JavaScript functions on the page.
 Wikipedia pages have a MediaWiki API accessible via mw.config.get().
@@ -508,6 +521,7 @@ RULES — read these first:
 - Be fast and direct. Minimize unnecessary tool calls.
 - If you are still working after 15 tool calls, wrap up with whatever you have.
 - Return partial results rather than nothing.
+- When done, close all tabs you opened during this task to keep the browser clean for the next task.
 
 TASK:
 Go to https://en.wikipedia.org/wiki/Artificial_intelligence.
@@ -557,6 +571,7 @@ RULES — read these first:
 - Be fast and direct. Minimize unnecessary tool calls.
 - If you are still working after 20 tool calls, wrap up with whatever you have.
 - Return partial results rather than nothing.
+- When done, close all tabs you opened during this task to keep the browser clean for the next task.
 
 HINT: Use "for" to open linked articles in one call:
   for "eval [...document.querySelector('.mw-parser-output > p').querySelectorAll('a[href^=\"/wiki/\"]')].slice(0,3).map(a=>'https://en.wikipedia.org'+a.getAttribute('href')).join('\n')" : open {}
@@ -595,6 +610,7 @@ RULES — read these first:
 - Be fast and direct. Minimize unnecessary tool calls.
 - If you are still working after 20 tool calls, wrap up with whatever you have.
 - Return partial results rather than nothing.
+- When done, close all tabs you opened during this task to keep the browser clean for the next task.
 
 TASK:
 Go to https://en.wikipedia.org/wiki/Artificial_intelligence. Find the first 3
@@ -619,15 +635,9 @@ OUTPUT FORMAT:
 
 ---
 
-## Task 9: Dynamic Page Monitoring (DOMShell only)
-
-> CiC has no equivalent to `functions`, `call`, or `watch --until-change`.
-> This task measures DOMShell-exclusive capabilities.
+## Task 9: Dynamic Page Monitoring
 
 ### Trial 25: Task 9 — DOMShell
-
-> **NOTE:** Replace `FILE_PATH` below with the absolute path to the demo page,
-> e.g. `/Users/yourname/repos/DOMShell/experiments/claude_domshell_vs_cic/demo/index.html`
 
 ```
 RULES — read these first:
@@ -639,48 +649,47 @@ RULES — read these first:
 - Be fast and direct. Minimize unnecessary tool calls.
 - If you are still working after 15 tool calls, wrap up with whatever you have.
 - Return partial results rather than nothing.
+- When done, close all tabs you opened during this task to keep the browser clean for the next task.
 
 HINT: Use "functions" to discover what's callable, "call funcName args" to invoke
-functions, and "watch cmd --until-change --interval 1" to detect when the counter changes.
+functions, and "watch cmd --until-change --interval 1" to detect when the clock changes.
 
 TASK:
-Open file://FILE_PATH
+Open https://www.time.gov/
 
-1. Use "functions" to discover the page's callable functions. List them all.
+1. Use "functions" to discover the page's callable functions. List all NON-STANDARD
+   functions (exclude browser builtins like alert, fetch, setTimeout, etc.).
 
-2. Call getCount() and report the current counter value.
+2. Call checkTime(5) and report the returned value.
 
-3. Call getMessage("Agent") and report the returned message.
+3. Read the current time displayed on the page (find the element with id "myTime").
 
-4. Use "watch" with --until-change to detect when the counter increments.
+4. Use "watch" with --until-change to detect when the displayed time changes.
    Report the before and after values.
 
-5. Call resetCount() to reset the counter to 0.
-
-6. Call getCount() again to verify it was reset.
+5. Read the UTC time (element with id "timeUTC") and compare it to the local time.
 
 OUTPUT FORMAT:
 ## Discovered Functions
 - function1()
-- function2()
+- function2(args)
 ...
 
 ## Function Calls
-- getCount(): [value]
-- getMessage("Agent"): [message]
+- checkTime(5): [value]
+
+## Current Time
+- Local time (#myTime): [value]
+- UTC time (#timeUTC): [value]
+- Offset: [difference]
 
 ## Change Detection
 - Before: [value]
 - After: [value]
 - Detected at iteration: [N]
-
-## Reset Verification
-- After resetCount(): getCount() = [value]
 ```
 
 ### Trial 26: Task 9 — Claude in Chrome
-
-> **NOTE:** Replace `FILE_PATH` below with the absolute path to the demo page.
 
 ```
 RULES — read these first:
@@ -692,40 +701,40 @@ RULES — read these first:
 - Be fast and direct. Minimize unnecessary tool calls.
 - If you are still working after 15 tool calls, wrap up with whatever you have.
 - Return partial results rather than nothing.
+- When done, close all tabs you opened during this task to keep the browser clean for the next task.
 
 TASK:
-Navigate to file://FILE_PATH
+Navigate to https://www.time.gov/
 
 1. Use javascript_exec to discover what callable functions are defined on window
    (not standard browser APIs). List them all.
 
-2. Use javascript_exec to call getCount() and report the current counter value.
+2. Call checkTime(5) via javascript_exec and report the returned value.
 
-3. Use javascript_exec to call getMessage("Agent") and report the returned message.
+3. Read the current time displayed on the page (find the element with id "myTime").
 
-4. Read the counter value, wait a few seconds, then read it again to detect a change.
-   Report the before and after values.
+4. Read the time again after a short wait (use javascript_exec with a setTimeout/Promise
+   to wait ~2 seconds, then read again). Report the before and after values.
 
-5. Use javascript_exec to call resetCount() to reset the counter to 0.
-
-6. Use javascript_exec to call getCount() to verify it was reset.
+5. Read the UTC time (element with id "timeUTC") and compare it to the local time.
 
 OUTPUT FORMAT:
 ## Discovered Functions
 - function1()
-- function2()
+- function2(args)
 ...
 
 ## Function Calls
-- getCount(): [value]
-- getMessage("Agent"): [message]
+- checkTime(5): [value]
+
+## Current Time
+- Local time (#myTime): [value]
+- UTC time (#timeUTC): [value]
+- Offset: [difference]
 
 ## Change Detection
 - Before: [value]
 - After: [value]
-
-## Reset Verification
-- After resetCount(): getCount() = [value]
 ```
 
 ---
@@ -744,11 +753,15 @@ RULES — read these first:
 - Be fast and direct. Minimize unnecessary tool calls.
 - If you are still working after 20 tool calls, wrap up with whatever you have.
 - Return partial results rather than nothing.
+- When done, close all tabs you opened during this task to keep the browser clean for the next task.
 
 HINT: Save a parameterized script with "script save" using $1 for the variable:
   script save wiki_search open https://en.wikipedia.org ; submit search_input $1 ; eval document.querySelector('.mw-parser-output > p:not(.mw-empty-elt)').textContent
 Then use "for" to run it for each search term:
-  for "eval ['Artificial intelligence','Machine learning','Deep learning'].join('\n')" : script run wiki_search {}
+  for "eval ['Artificial intelligence','Machine learning','Deep learning'].join('\n')" : script run wiki_search "{}"
+IMPORTANT: Multi-word arguments for script run MUST be quoted with double quotes.
+  script run wiki_search "Artificial intelligence"  (correct)
+  script run wiki_search Artificial intelligence     (WRONG - splits into $1=Artificial, $2=intelligence)
 
 TASK:
 Search Wikipedia for 3 different topics: "Artificial intelligence", "Machine learning",
@@ -782,6 +795,7 @@ RULES — read these first:
 - Be fast and direct. Minimize unnecessary tool calls.
 - If you are still working after 20 tool calls, wrap up with whatever you have.
 - Return partial results rather than nothing.
+- When done, close all tabs you opened during this task to keep the browser clean for the next task.
 
 TASK:
 Search Wikipedia for 3 different topics: "Artificial intelligence", "Machine learning",

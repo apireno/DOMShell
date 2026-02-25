@@ -1224,6 +1224,10 @@ const COMMAND_HELP: Record<string, string> = {
     "  $0 = script name, $# = number of args.",
     "  If no args passed, $N remain as literal text.",
     "",
+    "\x1b[33mIMPORTANT:\x1b[0m Multi-word arguments MUST be quoted with double quotes:",
+    "  script run search \"Artificial intelligence\"     \x1b[32m← correct\x1b[0m ($1 = Artificial intelligence)",
+    "  script run search Artificial intelligence        \x1b[31m← WRONG\x1b[0m ($1 = Artificial, $2 = intelligence)",
+    "",
     "Scripts persist across service worker restarts.",
     "Total runtime for 'script run' capped at 28 seconds.",
     "",
@@ -1236,7 +1240,7 @@ const COMMAND_HELP: Record<string, string> = {
   each: [
     "\x1b[1;36meach\x1b[0m \u2014 Run a command across multiple tabs",
     "",
-    "\x1b[33mUsage:\x1b[0m each [--pattern FILTER] <command>",
+    "\x1b[33mUsage:\x1b[0m each [--pattern FILTER] [--limit N] <command>",
     "",
     "Iterates over all non-chrome tabs (optionally filtered by title/URL pattern),",
     "switches into each, runs the command, and collects results.",
@@ -1244,13 +1248,14 @@ const COMMAND_HELP: Record<string, string> = {
     "",
     "\x1b[33mOptions:\x1b[0m",
     "  \x1b[32m--pattern FILTER\x1b[0m  Only tabs whose title or URL contains FILTER",
+    "  \x1b[32m--limit N\x1b[0m         Process at most N matching tabs",
     "",
     "Total runtime capped at 28 seconds.",
     "",
     "\x1b[33mExamples:\x1b[0m",
-    "  each text                          Get text of every tab",
-    "  each --pattern wiki text            Get text from Wikipedia tabs",
-    "  each --pattern github eval document.title    Get titles of GitHub tabs",
+    "  each text                              Get text of every tab",
+    "  each --pattern wiki text                Get text from Wikipedia tabs",
+    "  each --pattern wiki --limit 3 eval document.title    First 3 Wikipedia tabs",
   ].join("\r\n"),
 
   bookmark: [
@@ -1625,7 +1630,7 @@ function handleHelp(): string {
     "  \x1b[32mwatch <cmd>\x1b[0m        Re-run a command periodically (\x1b[90m--interval N --times N --until-change\x1b[0m)",
     "  \x1b[32mfor <src> : <tpl>\x1b[0m  Iterate over output lines, {} = each line",
     "  \x1b[32mscript save|run\x1b[0m    Save and run multi-command scripts (\x1b[90mlist, show, delete\x1b[0m)",
-    "  \x1b[32meach [--pattern] <cmd>\x1b[0m  Run a command across multiple tabs",
+    "  \x1b[32meach [--pattern] [--limit N] <cmd>\x1b[0m  Run a command across multiple tabs",
     "  \x1b[32mfunctions [pat]\x1b[0m    List callable page functions (\x1b[90m--json\x1b[0m)",
     "  \x1b[32mcall <fn> [args]\x1b[0m   Call a global JS function by name",
     "",
@@ -2794,7 +2799,7 @@ async function handleWatch(rawArgs: string): Promise<string> {
 
   const results: string[] = [];
   const start = Date.now();
-  const maxMs = 28000;
+  const maxMs = 120000;
   let prevOutput: string | null = null;
 
   for (let i = 0; i < times; i++) {
@@ -2836,8 +2841,10 @@ async function handleFor(rawArgs: string): Promise<string> {
   const args = rawArgs.trim();
   if (!args) return "\x1b[31mUsage: for <source-cmd> : <action-template>\x1b[0m";
 
-  // Split on ' : ' (space-colon-space) to distinguish from URLs
-  const sepIdx = args.indexOf(" : ");
+  // Split on LAST ' : ' (space-colon-space) — use lastIndexOf so complex source
+  // expressions containing ' : ' (ternary operators, etc.) don't break parsing.
+  // Templates are simple commands like 'open {}' that won't contain ' : '.
+  const sepIdx = args.lastIndexOf(" : ");
   if (sepIdx === -1) {
     return "\x1b[31mfor: missing ' : ' separator. Usage: for <source-cmd> : <action-template>\x1b[0m";
   }
@@ -2850,7 +2857,7 @@ async function handleFor(rawArgs: string): Promise<string> {
   // Execute source command
   const sourceOutput = await executeCommand(sourceCmd);
   const items = sourceOutput
-    .split("\r\n")
+    .split(/\r?\n/)
     .map((line) => {
       let s = stripAnsi(line).trim();
       // Strip leading [d]/[x]/[-] type prefix from find output
@@ -2866,7 +2873,7 @@ async function handleFor(rawArgs: string): Promise<string> {
   if (items.length === 0) return "\x1b[90m(no items from source command)\x1b[0m";
 
   const maxItems = 50;
-  const maxMs = 28000;
+  const maxMs = 120000;
   const start = Date.now();
   const results: string[] = [];
 
@@ -2891,7 +2898,7 @@ async function handleFor(rawArgs: string): Promise<string> {
 // ---- script ----
 
 async function handleScript(rawArgs: string): Promise<string> {
-  const parts = rawArgs.trim().split(/\s+/);
+  const parts = parseCommandLine(rawArgs);
   const sub = parts[0]?.toLowerCase();
 
   if (!sub || sub === "list") {
@@ -2936,7 +2943,7 @@ async function handleScript(rawArgs: string): Promise<string> {
     const cmds = scripts[name];
     const results: string[] = [];
     const start = Date.now();
-    const maxMs = 28000;
+    const maxMs = 120000;
 
     for (let i = 0; i < cmds.length; i++) {
       if (Date.now() - start > maxMs) {
@@ -2977,13 +2984,19 @@ async function handleEach(rawArgs: string): Promise<string> {
   const args = rawArgs.trim();
   if (!args) return "\x1b[31mUsage: each [--pattern FILTER] <command>\x1b[0m";
 
-  // Extract --pattern
+  // Extract --pattern and --limit
   let pattern = "";
+  let limit = 0;
   let innerCmd = args;
   const patternMatch = args.match(/--pattern\s+(\S+)/);
   if (patternMatch) {
     pattern = patternMatch[1].toLowerCase();
     innerCmd = innerCmd.replace(patternMatch[0], "").trim();
+  }
+  const limitMatch = innerCmd.match(/--limit\s+(\d+)/);
+  if (limitMatch) {
+    limit = parseInt(limitMatch[1], 10);
+    innerCmd = innerCmd.replace(limitMatch[0], "").trim();
   }
   if (!innerCmd) return "\x1b[31meach: no command specified\x1b[0m";
 
@@ -3008,6 +3021,11 @@ async function handleEach(rawArgs: string): Promise<string> {
       : "\x1b[90m(no eligible tabs)\x1b[0m";
   }
 
+  // Apply --limit
+  if (limit > 0 && allTabs.length > limit) {
+    allTabs.length = limit;
+  }
+
   // Save current state
   const savedPath = [...state.path];
   const savedAxNodeIds = [...state.axNodeIds];
@@ -3016,7 +3034,7 @@ async function handleEach(rawArgs: string): Promise<string> {
 
   const results: string[] = [];
   const start = Date.now();
-  const maxMs = 28000;
+  const maxMs = 120000;
 
   for (const tab of allTabs) {
     if (Date.now() - start > maxMs) {
@@ -3290,8 +3308,18 @@ async function handleSubmit(args: string[]): Promise<string> {
   const value = pa.positional.slice(1).join(" ");
   const currentId = getCurrentNodeId();
 
-  // 1. Find and focus the input
-  const input = resolveByPath(currentId, inputName, nodeMap);
+  // 1. Find and focus the input (exact match, then fuzzy fallback)
+  let input = resolveByPath(currentId, inputName, nodeMap);
+  if (!input) {
+    // Fuzzy fallback: strip common suffixes and search recursively for input elements
+    const baseName = inputName.replace(/_(input|search|btn|button|select|checkbox|radio)$/i, "").toLowerCase();
+    const inputRoles = expandTypeFilter("input");
+    const candidates: Array<{ path: string; node: VFSNode }> = [];
+    await findRecursive(currentId, "", baseName, inputRoles, candidates, new Set(), 5);
+    if (candidates.length > 0) {
+      input = candidates[0].node;
+    }
+  }
   if (!input) {
     return `\x1b[31msubmit: ${inputName}: No such element\x1b[0m`;
   }
@@ -3312,7 +3340,17 @@ async function handleSubmit(args: string[]): Promise<string> {
 
   // 4. Submit: click button or press Enter
   if (submitBtnName) {
-    const btn = resolveByPath(currentId, submitBtnName, nodeMap);
+    let btn = resolveByPath(currentId, submitBtnName, nodeMap);
+    if (!btn) {
+      // Fuzzy fallback for submit button
+      const baseBtnName = submitBtnName.replace(/_(input|search|btn|button|select|checkbox|radio)$/i, "").toLowerCase();
+      const btnRoles = expandTypeFilter("button");
+      const btnCandidates: Array<{ path: string; node: VFSNode }> = [];
+      await findRecursive(currentId, "", baseBtnName, btnRoles, btnCandidates, new Set(), 5);
+      if (btnCandidates.length > 0) {
+        btn = btnCandidates[0].node;
+      }
+    }
     if (btn && btn.backendDOMNodeId) {
       try {
         await cdp.clickByBackendNodeId(btn.backendDOMNodeId);
@@ -4066,7 +4104,7 @@ async function handleNavigate(args: string[]): Promise<string> {
   ensureInsideTab();
 
   let url = args[0];
-  if (!url.match(/^https?:\/\//i)) {
+  if (!url.match(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//)) {
     url = "https://" + url;
   }
 
@@ -4091,7 +4129,7 @@ async function handleNavigate(args: string[]): Promise<string> {
     setTimeout(() => {
       chrome.tabs.onUpdated.removeListener(listener);
       resolve();
-    }, 15000);
+    }, 5000);
   });
 
   // Re-attach and fetch new AX tree
@@ -4123,7 +4161,7 @@ async function handleOpen(args: string[]): Promise<string> {
   }
 
   let url = args[0];
-  if (!url.match(/^https?:\/\//i)) {
+  if (!url.match(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//)) {
     url = "https://" + url;
   }
 
@@ -4143,7 +4181,7 @@ async function handleOpen(args: string[]): Promise<string> {
     setTimeout(() => {
       chrome.tabs.onUpdated.removeListener(listener);
       resolve();
-    }, 15000);
+    }, 5000);
   });
 
   // Attach and enter the new tab

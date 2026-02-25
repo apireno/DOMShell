@@ -624,9 +624,9 @@ Options:
 
 | Command | Description |
 |---|---|
-| `watch <cmd> [--interval N] [--times N]` | Re-run a command periodically (default: 5 times, 2s apart). Capped at 28s. |
+| `watch <cmd> [--interval N] [--times N] [--until-change]` | Re-run a command periodically. `--until-change` stops when output differs. Capped at 28s. |
 | `for <source-cmd> : <action-tpl>` | Iterate over output lines. `{}` is replaced with each line. Capped at 50 items / 28s. |
-| `script list\|save\|show\|run\|delete` | Save and run multi-command scripts. Commands separated by ` ; ` in save. Persisted. |
+| `script list\|save\|show\|run\|delete` | Save and run multi-command scripts. `script run name arg1` replaces `$1` in saved commands. Persisted. |
 | `each [--pattern FILTER] <cmd>` | Run a command across all matching tabs. Restores original tab afterward. |
 | `functions [pattern] [--json]` | List callable global JS functions on the page with name, arity, params. |
 | `call <funcName> [arg1] [arg2] ...` | Call a global JS function by name. Args auto-parsed (JSON or string). Write-tier. |
@@ -1015,9 +1015,9 @@ dom@shell:$ disconnect
 | `domshell_whoami` | `whoami` | Sensitive |
 | `domshell_functions` | `functions [pattern] [--json]` (list callable page functions) | Read |
 | `domshell_call` | `call <funcName> [args]` (call a global JS function) | Write |
-| `domshell_watch` | `watch <cmd> [--interval N] [--times N]` (periodic re-execution) | Read |
-| `domshell_for` | `for <source> : <template>` (iterate over output lines) | Read |
-| `domshell_script` | `script list\|save\|show\|run\|delete` (multi-command scripts) | Read |
+| `domshell_watch` | `watch <cmd> [--interval N] [--times N] [--until-change]` (periodic re-execution) | Read |
+| `domshell_for` | `for <source> : <template>` (iterate over output lines, `{}` replaced) | Read |
+| `domshell_script` | `script list\|save\|show\|run\|delete` (scripts with `$1` substitution) | Read |
 | `domshell_each` | `each [--pattern FILTER] <cmd>` (cross-tab operations) | Read |
 | `domshell_execute` | *(any command)* | Varies |
 

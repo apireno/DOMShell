@@ -219,8 +219,8 @@ function sendCommand(command: string): Promise<string> {
     const id = randomBytes(8).toString("hex");
     const timer = setTimeout(() => {
       pendingRequests.delete(id);
-      reject(new Error("Command timed out after 30 seconds"));
-    }, 30000);
+      reject(new Error("Command timed out after 150 seconds"));
+    }, 150000);
 
     pendingRequests.set(id, { resolve, reject, timer });
 
@@ -632,7 +632,7 @@ function createMcpServer(): McpServer {
 
   server.tool(
     "domshell_watch",
-    "Re-run a command periodically and collect results. Useful for monitoring dynamic content changes within a single tool call instead of making N separate calls.\n\nOptions:\n  --interval N      Seconds between runs (default: 2, min: 0.5)\n  --times N         Number of iterations (default: 5, max: 100)\n  --until-change    Stop early when output differs from previous iteration\n\nTotal runtime capped at 28 seconds.\n\nExamples:\n  watch ls --times 3 --interval 1\n  watch \"eval document.title\" --until-change --interval 1",
+    "Re-run a command periodically and collect results. Useful for monitoring dynamic content changes within a single tool call instead of making N separate calls.\n\nOptions:\n  --interval N      Seconds between runs (default: 2, min: 0.5)\n  --times N         Number of iterations (default: 5, max: 100)\n  --until-change    Stop early when output differs from previous iteration\n\nTotal runtime capped at 120 seconds.\n\nExamples:\n  watch ls --times 3 --interval 1\n  watch \"eval document.title\" --until-change --interval 1",
     { command: z.string().describe("The command to re-run periodically (e.g. 'ls', 'eval document.title')") },
     async ({ command }) => ({
       content: [{ type: "text", text: await executeWithSecurity(`watch ${command}`) }],
@@ -641,7 +641,7 @@ function createMcpServer(): McpServer {
 
   server.tool(
     "domshell_for",
-    "Iterate over command output lines. Runs a source command, splits output into lines, and for each line replaces {} in the action template and executes it. Capped at 50 items and 28 seconds.\n\nSeparator is ' : ' (space-colon-space) to avoid conflicts with URL colons.\n\nExamples:\n  for \"find --type heading -n 3\" : text {}\n  for \"eval [...urls].join('\\\\n')\" : open {}",
+    "Iterate over command output lines. Runs a source command, splits output into lines, and for each line replaces {} in the action template and executes it. Capped at 50 items and 120 seconds.\n\nSeparator is ' : ' (space-colon-space) to avoid conflicts with URL colons.\n\nExamples:\n  for \"find --type heading -n 3\" : text {}\n  for \"eval [...urls].join('\\\\n')\" : open {}",
     {
       source: z.string().describe("Source command whose output lines become iteration items"),
       template: z.string().describe("Action template with {} placeholder replaced by each line"),

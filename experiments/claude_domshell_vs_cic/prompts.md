@@ -708,13 +708,23 @@ Navigate to https://www.time.gov/
 
 1. Use javascript_exec to discover what callable functions are defined on window
    (not standard browser APIs). List them all.
+   HINT: Create a hidden iframe to get the default window properties, then diff
+   against the current window: Object.getOwnPropertyNames(window).filter(k =>
+   typeof window[k] === 'function' && !defaultKeys.has(k))
 
 2. Call checkTime(5) via javascript_exec and report the returned value.
 
 3. Read the current time displayed on the page (find the element with id "myTime").
 
-4. Read the time again after a short wait (use javascript_exec with a setTimeout/Promise
-   to wait ~2 seconds, then read again). Report the before and after values.
+4. Read the time again after a short wait. Report the before and after values.
+   HINT: Top-level await is NOT supported in javascript_exec. Use a Promise wrapper:
+   new Promise(resolve => {
+     const before = document.getElementById('myTime').textContent.trim();
+     setTimeout(() => {
+       const after = document.getElementById('myTime').textContent.trim();
+       resolve(JSON.stringify({ before, after }));
+     }, 2000);
+   })
 
 5. Read the UTC time (element with id "timeUTC") and compare it to the local time.
 
@@ -755,13 +765,12 @@ RULES — read these first:
 - Return partial results rather than nothing.
 - When done, close all tabs you opened during this task to keep the browser clean for the next task.
 
-HINT: Save a parameterized script with "script save" using $1 for the variable:
-  script save wiki_search open https://en.wikipedia.org ; submit search_input $1 ; eval document.querySelector('.mw-parser-output > p:not(.mw-empty-elt)').textContent
-Then use "for" to run it for each search term:
-  for "eval ['Artificial intelligence','Machine learning','Deep learning'].join('\n')" : script run wiki_search "{}"
-IMPORTANT: Multi-word arguments for script run MUST be quoted with double quotes.
-  script run wiki_search "Artificial intelligence"  (correct)
-  script run wiki_search Artificial intelligence     (WRONG - splits into $1=Artificial, $2=intelligence)
+HINT: Save a 2-command script using direct URL navigation (faster than open+submit):
+  script save wiki_direct navigate https://en.wikipedia.org/wiki/$1 ; eval document.querySelector('.mw-parser-output > p:not(.mw-empty-elt)').textContent
+Then use "for" to run it for each article using underscore-separated slugs:
+  for "eval ['Artificial_intelligence','Machine_learning','Deep_learning'].join('\n')" : script run wiki_direct "{}"
+NOTE: Use underscore slugs (Artificial_intelligence) not spaces — direct URL
+navigation avoids the search form entirely and is faster inside "for" loops.
 
 TASK:
 Search Wikipedia for 3 different topics: "Artificial intelligence", "Machine learning",

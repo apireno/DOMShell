@@ -181,6 +181,21 @@
       transition: opacity 0.3s;
     }
     .saved-msg.show { opacity: 1; }
+
+    /* Footer */
+    .footer {
+      margin-top: 24px;
+      font-size: 11px;
+      color: #80868b;
+      text-align: center;
+    }
+    .footer a {
+      color: #5f6368;
+      text-decoration: none;
+    }
+    .footer a:hover {
+      text-decoration: underline;
+    }
   </style>
 </head>
 <body>
@@ -222,6 +237,10 @@
   <div class="actions">
     <button class="primary" id="saveBtn">Save</button>
     <span class="saved-msg" id="savedMsg">Saved</span>
+  </div>
+
+  <div class="footer">
+    Built by <a href="https://pireno.com" target="_blank">Pireno</a>
   </div>
 
   <script src="options.js"></script>

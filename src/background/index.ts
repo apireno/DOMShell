@@ -513,9 +513,10 @@ chrome.runtime.onConnect.addListener((port) => {
 function formatWelcome(): string {
   return [
     "\x1b[36m\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557\x1b[0m",
-    "\x1b[36m\u2551\x1b[0m   \x1b[1;33mDOMShell v1.0.0\x1b[0m                                   \x1b[36m\u2551\x1b[0m",
+    "\x1b[36m\u2551\x1b[0m   \x1b[1;33mDOMShell v1.1.0\x1b[0m                                   \x1b[36m\u2551\x1b[0m",
     "\x1b[36m\u2551\x1b[0m   \x1b[37mThe browser is your filesystem.\x1b[0m                    \x1b[36m\u2551\x1b[0m",
     "\x1b[36m\u2551\x1b[0m   \x1b[90mhttps://github.com/apireno/DOMShell\x1b[0m                \x1b[36m\u2551\x1b[0m",
+    "\x1b[36m\u2551\x1b[0m   \x1b[90mBuilt by Pireno | pireno.com\x1b[0m                       \x1b[36m\u2551\x1b[0m",
     "\x1b[36m\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d\x1b[0m",
     "",
     "\x1b[90mType 'help' to see available commands.\x1b[0m",

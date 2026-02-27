@@ -47,7 +47,7 @@ For the stdio proxy (required if your client needs command/args format):
   "mcpServers": {
     "domshell": {
       "command": "npx",
-      "args": ["-y", "domshell-proxy", "--port", "3001", "--token", "YOUR_TOKEN"]
+      "args": ["-y", "-p", "@apireno/domshell", "domshell-proxy", "--port", "3001", "--token", "YOUR_TOKEN"]
     }
   }
 }

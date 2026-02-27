@@ -1034,7 +1034,7 @@ dom@shell:$ disconnect
 
 - [ ] **Chrome Web Store listing** — publish to the store for one-click install
 - [ ] **GitHub release with .crx** — downloadable extension package for sideloading
-- [ ] **MCP setup wizard** — an `npx domshell init` command (or in-extension prompt) that generates the Claude Desktop JSON config, sets a shared token, and writes it to `claude_desktop_config.json` automatically
+- [ ] **MCP setup wizard** — an `npx @apireno/domshell init` command (or in-extension prompt) that generates the Claude Desktop JSON config, sets a shared token, and writes it to `claude_desktop_config.json` automatically
 - [ ] **Support for other MCP clients** — Gemini Desktop, OpenAI ChatGPT desktop, Cursor, Windsurf, and other MCP-compatible hosts
 
 ### New Commands
@@ -1075,7 +1075,7 @@ dom@shell:$ disconnect
 
 ### Platform
 
-- [ ] **Standalone headless browser** — ship DOMShell as a self-contained headless Chromium process (via [Chrome for Testing](https://googlechromelabs.github.io/chrome-for-testing/) or embedded Chromium) that agents launch directly — no extension install, no user Chrome profile; just `npx domshell --headless` and connect via MCP. Ideal for CI pipelines, server-side automation, and agent-in-a-loop workflows where a visible browser isn't needed
+- [ ] **Standalone headless browser** — ship DOMShell as a self-contained headless Chromium process (via [Chrome for Testing](https://googlechromelabs.github.io/chrome-for-testing/) or embedded Chromium) that agents launch directly — no extension install, no user Chrome profile; just `npx @apireno/domshell --headless` and connect via MCP. Ideal for CI pipelines, server-side automation, and agent-in-a-loop workflows where a visible browser isn't needed
 - [ ] **Firefox extension** — port to Firefox using WebExtensions API + remote debugging protocol
 - [ ] **Playwright/Puppeteer backend** — alternative to Chrome extension for headless agent workflows
 - [ ] **REST API mode** — expose DOMShell commands over HTTP for non-MCP integrations

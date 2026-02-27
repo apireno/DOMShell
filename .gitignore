@@ -22,6 +22,7 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+.mcpregistry_*
 
 # Logs
 *.log
@@ -35,3 +36,4 @@ npm-debug.log*
 
 experiments/*/results
 *.mov
+docs/

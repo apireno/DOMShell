@@ -40,7 +40,7 @@
 
 **The browser is your filesystem.** A Chrome Extension that lets AI agents (and humans) browse the web using standard Linux commands — `ls`, `cd`, `cat`, `grep`, `click` — via a terminal in the Chrome Side Panel.
 
-[Install from Chrome Web Store](https://pireno.com/domshell) | [Read the blog post](https://dev.to/apireno/why-i-built-a-filesystem-for-the-browser-3kpa) | [Project home](https://pireno.com/domshell)
+[Install from Chrome Web Store](https://pireno.com/domshell) | [npm package](https://www.npmjs.com/package/@apireno/domshell) | [Read the blog post](https://dev.to/apireno/why-i-built-a-filesystem-for-the-browser-3kpa) | [Project home](https://pireno.com/domshell)
 
 DOMShell maps the browser into a virtual filesystem. Windows and tabs become top-level directories (`~`). Each tab's Accessibility Tree becomes a nested filesystem where container elements are directories and buttons, links, and inputs are files. Navigate Chrome the same way you'd navigate `/usr/local/bin`.
 
@@ -819,38 +819,42 @@ After building, reload the extension on `chrome://extensions/` and reopen the si
 
 DOMShell includes a hardened MCP server that lets any MCP-compatible client control the browser through DOMShell commands. The server runs as a standalone HTTP service — multiple clients can connect simultaneously.
 
+### Install via npm (Recommended)
+
+```bash
+npm install -g @apireno/domshell
+```
+
+Or run directly without installing:
+
+```bash
+npx @apireno/domshell --allow-write --no-confirm --token my-secret-token
+```
+
 ### Architecture
 
 ```
 User starts independently:
-  npx tsx mcp-server/index.ts --allow-write --token xyz
+  npx @apireno/domshell --allow-write --token xyz
     → HTTP on :3001/mcp  (MCP clients)
     → WebSocket on :9876  (Chrome extension)
 
 Claude Desktop spawns (stdio proxy):                    ┐
-  npx tsx mcp-server/proxy.ts --port 3001 --token xyz   ├─► HTTP :3001/mcp
+  npx domshell-proxy --port 3001 --token xyz            ├─► HTTP :3001/mcp
 Claude CLI connects directly:                           │
   url: http://localhost:3001/mcp?token=xyz              │
 Gemini CLI connects directly:                           │
   url: http://localhost:3001/mcp?token=xyz              ┘
 ```
 
-The MCP server is a **standalone HTTP service** — you start it independently, and any number of MCP clients connect to it. No single client "owns" the server process. For clients that require stdio (like Claude Desktop), a tiny proxy (`proxy.ts`) bridges stdio to the running HTTP server.
+The MCP server is a **standalone HTTP service** — you start it independently, and any number of MCP clients connect to it. No single client "owns" the server process. For clients that require stdio (like Claude Desktop), a tiny proxy bridges stdio to the running HTTP server.
 
 ### Setup
 
-**1. Install MCP server dependencies:**
+**1. Start the MCP server:**
 
 ```bash
-cd mcp-server
-npm install
-```
-
-**2. Start the MCP server:**
-
-```bash
-cd mcp-server
-npx tsx index.ts --allow-write --no-confirm --token my-secret-token
+npx @apireno/domshell --allow-write --no-confirm --token my-secret-token
 ```
 
 The server starts two listeners:
@@ -859,7 +863,7 @@ The server starts two listeners:
 
 > **Tip:** Use `--token` to set a known token so you can pre-configure clients. If omitted, a random token is generated and printed on startup.
 
-**3. Connect MCP clients:**
+**2. Connect MCP clients:**
 
 **Claude CLI / Gemini CLI / Cursor** (direct HTTP — recommended):
 
@@ -876,14 +880,11 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
   "mcpServers": {
     "domshell": {
       "command": "npx",
-      "args": ["tsx", "/absolute/path/to/DOMShell/mcp-server/proxy.ts", "--port", "3001", "--token", "my-secret-token"],
-      "env": {}
+      "args": ["-y", "@apireno/domshell", "--allow-write", "--no-confirm", "--token", "my-secret-token"]
     }
   }
 }
 ```
-
-> **Note:** The proxy connects to the already-running server over HTTP. If the server isn't running, the proxy will fail. Use an absolute path (not `~`).
 
 Restart Claude Desktop. DOMShell tools will appear.
 
@@ -1109,6 +1110,7 @@ An AI-designed project, built by another AI, intended for AI agents to use. It's
 ## Links
 
 - [Chrome Web Store](https://pireno.com/domshell)
+- [npm: @apireno/domshell](https://www.npmjs.com/package/@apireno/domshell)
 - [Blog: Why I Built a Filesystem for the Browser](https://dev.to/apireno/why-i-built-a-filesystem-for-the-browser-3kpa)
 - [Project home & privacy policy](https://pireno.com/domshell)
 - Built by [Pireno](https://pireno.com)

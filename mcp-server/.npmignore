@@ -1,0 +1,7 @@
+*.ts
+!*.d.ts
+tsconfig.json
+audit.log
+node_modules/
+package-lock.json
+.env

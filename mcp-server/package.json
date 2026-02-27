@@ -1,10 +1,44 @@
 {
-  "name": "domshell-mcp-server",
-  "version": "1.1.0",
-  "description": "MCP server for DOMShell — bridges Claude Desktop to the Chrome Extension",
+  "name": "@apireno/domshell",
+  "version": "1.1.1",
+  "description": "MCP server that turns your browser into a filesystem. 38 tools let AI agents ls, cd, grep, click, and type through Chrome via the DOMShell extension.",
   "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "domshell": "./bin/domshell.js",
+    "domshell-proxy": "./bin/domshell-proxy.js"
+  },
+  "files": [
+    "dist/",
+    "bin/",
+    "README.md"
+  ],
   "scripts": {
-    "start": "tsx index.ts"
+    "build": "tsc",
+    "start": "tsx index.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "ai-agent",
+    "browser-automation",
+    "chrome-extension",
+    "dom",
+    "web-scraping",
+    "claude",
+    "filesystem"
+  ],
+  "author": "Pireno (https://pireno.com)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/apireno/DOMShell"
+  },
+  "homepage": "https://pireno.com/domshell",
+  "mcpName": "io.github.apireno/domshell",
+  "engines": {
+    "node": ">=18"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",

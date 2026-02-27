@@ -1,0 +1,23 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.apireno/domshell",
+  "title": "DOMShell",
+  "description": "Browse the web with filesystem commands. 38 MCP tools: ls, cd, grep, click, type via Chrome.",
+  "websiteUrl": "https://pireno.com/domshell",
+  "repository": {
+    "url": "https://github.com/apireno/DOMShell",
+    "source": "github",
+    "subfolder": "mcp-server"
+  },
+  "version": "1.1.1",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@apireno/domshell",
+      "version": "1.1.1",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

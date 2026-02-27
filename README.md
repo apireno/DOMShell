@@ -40,7 +40,7 @@
 
 **The browser is your filesystem.** A Chrome Extension that lets AI agents (and humans) browse the web using standard Linux commands — `ls`, `cd`, `cat`, `grep`, `click` — via a terminal in the Chrome Side Panel.
 
-[Install from Chrome Web Store](https://pireno.com/domshell) | [Read the blog post](https://dev.to/apireno/why-i-built-a-filesystem-for-the-browser) | [Project home](https://pireno.com/domshell)
+[Install from Chrome Web Store](https://pireno.com/domshell) | [Read the blog post](https://dev.to/apireno/why-i-built-a-filesystem-for-the-browser-3kpa) | [Project home](https://pireno.com/domshell)
 
 DOMShell maps the browser into a virtual filesystem. Windows and tabs become top-level directories (`~`). Each tab's Accessibility Tree becomes a nested filesystem where container elements are directories and buttons, links, and inputs are files. Navigate Chrome the same way you'd navigate `/usr/local/bin`.
 
@@ -1109,7 +1109,7 @@ An AI-designed project, built by another AI, intended for AI agents to use. It's
 ## Links
 
 - [Chrome Web Store](https://pireno.com/domshell)
-- [Blog: Why I Built a Filesystem for the Browser](https://dev.to/apireno/why-i-built-a-filesystem-for-the-browser)
+- [Blog: Why I Built a Filesystem for the Browser](https://dev.to/apireno/why-i-built-a-filesystem-for-the-browser-3kpa)
 - [Project home & privacy policy](https://pireno.com/domshell)
 - Built by [Pireno](https://pireno.com)
 

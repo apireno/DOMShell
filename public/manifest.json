@@ -6,7 +6,6 @@
   "permissions": [
     "sidePanel",
     "debugger",
-    "activeTab",
     "cookies",
     "storage",
     "alarms"

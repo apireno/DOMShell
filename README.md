@@ -851,6 +851,22 @@ The MCP server is a **standalone HTTP service** — you start it independently, 
 
 ### Setup
 
+**Quick setup (recommended):**
+
+```bash
+npx @apireno/domshell init
+```
+
+The wizard detects installed MCP clients (Claude Desktop, Cursor, Windsurf), generates a shared token, and writes each client's config. You then start the server once in a terminal — all clients connect to it.
+
+Use `--yes` for non-interactive mode with sensible defaults:
+
+```bash
+npx @apireno/domshell init --yes
+```
+
+**Manual setup:**
+
 **1. Start the MCP server:**
 
 ```bash
@@ -1032,9 +1048,9 @@ dom@shell:$ disconnect
 
 ### Distribution & Setup
 
-- [ ] **Chrome Web Store listing** — publish to the store for one-click install
-- [ ] **GitHub release with .crx** — downloadable extension package for sideloading
-- [ ] **MCP setup wizard** — an `npx @apireno/domshell init` command (or in-extension prompt) that generates the Claude Desktop JSON config, sets a shared token, and writes it to `claude_desktop_config.json` automatically
+- [x] **Chrome Web Store listing** — [live on the Chrome Web Store](https://pireno.com/domshell)
+- [x] **GitHub release with .crx** — [v1.1.1 release](https://github.com/apireno/DOMShell/releases/tag/v1.1.1) with extension zip
+- [x] **MCP setup wizard** — `npx @apireno/domshell init` detects installed MCP clients, generates a token, and writes the config automatically
 - [ ] **Support for other MCP clients** — Gemini Desktop, OpenAI ChatGPT desktop, Cursor, Windsurf, and other MCP-compatible hosts
 
 ### New Commands
@@ -1111,6 +1127,9 @@ An AI-designed project, built by another AI, intended for AI agents to use. It's
 
 - [Chrome Web Store](https://pireno.com/domshell)
 - [npm: @apireno/domshell](https://www.npmjs.com/package/@apireno/domshell)
+- [MCP Server Registry](https://registry.modelcontextprotocol.io)
+- [mcpservers.org](https://mcpservers.org/servers/apireno/domshell)
+- [Glama](https://glama.ai/mcp/servers/@apireno/domshell)
 - [Blog: Why I Built a Filesystem for the Browser](https://dev.to/apireno/why-i-built-a-filesystem-for-the-browser-3kpa)
 - [Project home & privacy policy](https://pireno.com/domshell)
 - Built by [Pireno](https://pireno.com)

@@ -20,10 +20,18 @@ You also need the [DOMShell Chrome Extension](https://pireno.com/domshell) — t
 
 ## Quick Start
 
-1. Install the Chrome extension from the [Chrome Web Store](https://pireno.com/domshell)
+```bash
+npx @apireno/domshell init
+```
+
+The setup wizard detects installed MCP clients (Claude Desktop, Cursor, Windsurf), generates a secure token, and writes the config. Use `--yes` for non-interactive mode.
+
+Then:
+
+1. Install the [DOMShell Chrome Extension](https://pireno.com/domshell)
 2. Open Chrome's side panel and start a DOMShell session
-3. Start the MCP server: `npx @apireno/domshell --allow-write`
-4. Connect from Claude Desktop, Cursor, or any MCP client
+3. Restart your MCP client — DOMShell tools will appear
+4. In the DOMShell terminal, run `connect <token>` (printed by the wizard)
 
 ## Claude Desktop Config
 

@@ -1,2 +1,6 @@
 #!/usr/bin/env node
-import "../dist/index.js";
+if (process.argv.includes("init")) {
+  import("../dist/init.js").then((m) => m.main());
+} else {
+  import("../dist/index.js");
+}

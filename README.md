@@ -1102,6 +1102,7 @@ dom@shell:$ disconnect
 - [x] **Nexa: DOMShell vs Raw HTML** — same model (Qwen3-4B), same tasks: compare DOMShell's text/AX-tree interface against raw HTML scraping. Tests on both nexa serve and Ollama backends. Found a crossover interaction: Ollama+DOMShell and Nexa+HTML are equally best (1.20 avg). See `experiments/nexa_ollama/`.
 - [x] **Nexa vs Claude (model size)** — compared Qwen3-1.7B/4B on progressive tasks. Capability cliff at T3 (paragraph extraction). 4B shows better error recovery. See `experiments/nexa_claude/`.
 - [x] **Model shootout** — compared Qwen3-4B, Hermes3-3B, Granite4-Tiny, Llama3.2-3B on Ollama+DOMShell. Qwen3-4B remains best (8/15), only model to break the T3 cliff. Llama3.2-3B close second (7/15, zero hallucinations). See `experiments/model_shootout/`.
+- [ ] **Token cost benchmark** — measure total input/output tokens per task across DOMShell vs screenshot-based browsing (CiC). Extend existing `experiments/claude_domshell_vs_cic/` with token counting. Hypothesis: structured text (2-3KB per response) vs base64 screenshots (500KB+) should show >2x token savings on top of the 2x call-count reduction already measured
 
 ## Integrations
 

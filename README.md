@@ -58,6 +58,10 @@ This means an agent can:
 
 The filesystem abstraction is deterministic, semantic, and works on any website — no site-specific adapters needed.
 
+## Hosted deployment
+
+A hosted deployment is available on [Fronteir AI](https://fronteir.ai/mcp/apireno-domshell).
+
 ## Installation
 
 ### Chrome Web Store (Recommended)

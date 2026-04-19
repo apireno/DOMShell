@@ -37,3 +37,4 @@ npm-debug.log*
 experiments/*/results
 *.mov
 docs/
+.cto-path

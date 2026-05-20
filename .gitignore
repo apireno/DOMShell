@@ -14,6 +14,9 @@ dist/
 *.swo
 *~
 
+# Claude Code harness config (local only — not for public repo)
+.claude/
+
 # OS files
 .DS_Store
 Thumbs.db

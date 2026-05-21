@@ -208,8 +208,11 @@ export default function Terminal() {
         term.write(suffix);
       }
     } else {
-      // Multiple matches — find common prefix for partial completion
-      const commonPrefix = findCommonPrefix(matches);
+      // Multiple matches — extend to the common prefix, EXCEPT when every match
+      // is numeric (e.g. tab IDs): their shared prefix is meaningless noise, so
+      // just list the options and let the user pick.
+      const allNumeric = matches.every((m) => /^\d+$/.test(m));
+      const commonPrefix = allNumeric ? partial : findCommonPrefix(matches);
       const extraChars = commonPrefix.slice(partial.length);
 
       if (extraChars.length > 0) {

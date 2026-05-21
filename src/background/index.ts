@@ -1796,6 +1796,19 @@ const COMMANDS = [
 interface Completion { value: string; label: string; }
 const cmpl = (value: string, label?: string): Completion => ({ value, label: label ?? value });
 
+/** Tab-id completions (value = id, label = "id  title") from a tab list, group-scoped. */
+function tabCompletions(tabs: chrome.tabs.Tab[], partial: string): Completion[] {
+  const out: Completion[] = [];
+  for (const t of tabs) {
+    if (!tabInScope(t)) continue;
+    const idStr = String(t.id ?? "");
+    if (idStr && idStr.startsWith(partial)) {
+      out.push(cmpl(idStr, `${idStr}  ${(t.title ?? "untitled").slice(0, 50)}`));
+    }
+  }
+  return out;
+}
+
 async function getCompletions(partial: string, command: string, line: string = ""): Promise<Completion[]> {
   // If no command yet (completing the command name itself)
   if (!command || command === partial) {
@@ -1846,24 +1859,34 @@ async function getCompletions(partial: string, command: string, line: string = "
       // At ~: complete "tabs" or "windows"
       return ["tabs/", "windows/"].filter((c) => c.toLowerCase().startsWith(lower)).map((c) => cmpl(c));
     }
-    // At ~/tabs: complete tab IDs (label shows the title), scoped to the attached group.
-    if (state.path[0] === "tabs") {
-      try {
-        const wins = await chrome.windows.getAll({ populate: true });
+    try {
+      const wins = await chrome.windows.getAll({ populate: true });
+      // At ~/tabs: complete tab IDs across all windows, scoped to the attached group.
+      if (state.path[0] === "tabs") {
+        const all: chrome.tabs.Tab[] = [];
+        for (const w of wins) for (const t of w.tabs ?? []) all.push(t);
+        return tabCompletions(all, partial);
+      }
+      // At ~/windows: complete window IDs (only windows with in-scope tabs).
+      if (state.path[0] === "windows" && state.path.length === 1) {
         const out: Completion[] = [];
         for (const w of wins) {
-          for (const t of w.tabs ?? []) {
-            if (!tabInScope(t)) continue;
-            const idStr = String(t.id ?? "");
-            if (idStr && idStr.startsWith(partial)) {
-              out.push(cmpl(idStr, `${idStr}  ${(t.title ?? "untitled").slice(0, 50)}`));
-            }
+          const scoped = (w.tabs ?? []).filter(tabInScope);
+          if (scoped.length === 0) continue;
+          const idStr = String(w.id ?? "");
+          if (idStr && idStr.startsWith(partial)) {
+            out.push(cmpl(idStr, `${idStr}  ${scoped.length} tab${scoped.length === 1 ? "" : "s"}${w.focused ? " (focused)" : ""}`));
           }
         }
         return out;
-      } catch {
-        return [];
       }
+      // At ~/windows/<id>: complete tab IDs in that window, scoped to the group.
+      if (state.path[0] === "windows" && state.path.length === 2) {
+        const win = wins.find((w) => w.id === parseInt(state.path[1], 10));
+        return tabCompletions(win?.tabs ?? [], partial);
+      }
+    } catch {
+      return [];
     }
     return [];
   }

@@ -24,6 +24,7 @@ const ALLOW_WRITE = hasFlag("--allow-write") || hasFlag("--allow-all");
 const ALLOW_SENSITIVE = hasFlag("--allow-sensitive") || hasFlag("--allow-all");
 const NO_CONFIRM = hasFlag("--no-confirm");
 const EXPOSE_COOKIES = hasFlag("--expose-cookies");
+const GRANULAR = hasFlag("--granular");  // expose the 38 per-command tools (ADR-002 D2)
 const PORT = parseInt(getFlagValue("--port", "9876"), 10);
 const MCP_PORT = parseInt(getFlagValue("--mcp-port", "3001"), 10);
 const LOG_FILE = getFlagValue("--log-file", "audit.log");
@@ -441,6 +442,10 @@ function createMcpServer(): McpServer {
 
   // -- Read tier tools (always available) --
 
+  // Granular per-command tools (ADR-002 D2) — registered only with --granular.
+  // Default mode exposes domshell_execute alone (registered below). Block left
+  // un-reindented to keep the diff reviewable; see ADR-002.
+  if (GRANULAR) {
   server.tool(
     "domshell_tabs",
     "List all open browser tabs with their IDs, titles, URLs, and window info. Use this to find the right tab before switching. Equivalent to 'ls ~/tabs/'.",
@@ -896,19 +901,30 @@ function createMcpServer(): McpServer {
       })
     );
   }
+  }  // end granular per-command tools (ADR-002)
 
-  // -- Fallback execute tool --
+  // -- Primary interface: domshell_execute (always registered) --
 
   server.tool(
     "domshell_execute",
-    "Execute any DOMShell command. Use this for commands not covered by specific tools (e.g. 'env', 'export', 'debug stats'). Supports pipe operator: 'find --type link --meta | grep github'. Write and sensitive commands are subject to the same security restrictions.",
-    { command: z.string().describe("The full command to execute (e.g. 'ls -l', 'debug stats', 'find --type link | grep login')") },
-    async ({ command }) => ({
-      content: [{ type: "text", text: await executeWithSecurity(command) }],
-    })
+    "Run DOMShell commands — the primary DOMShell interface. Send one command, or several separated by newlines to run a whole workflow in a single call (e.g. \"open example.com\\ncd main\\ntext\"). The pipe operator works within a command ('find --type link --meta | grep github'). Write and sensitive commands are subject to the usual security restrictions. See the server instructions for the full command reference.",
+    { command: z.string().describe("A DOMShell command, or multiple commands separated by newlines (e.g. 'ls -l' or 'open example.com\\ncd main\\ntext')") },
+    async ({ command }) => {
+      // Multi-command: each non-blank line runs in sequence (ADR-002 D3).
+      const lines = command.split("\n").map((l) => l.trim()).filter(Boolean);
+      if (lines.length <= 1) {
+        return { content: [{ type: "text", text: await executeWithSecurity(command.trim()) }] };
+      }
+      const out: string[] = [];
+      for (const line of lines) {
+        out.push(`$ ${line}`);
+        out.push(await executeWithSecurity(line));
+      }
+      return { content: [{ type: "text", text: out.join("\n") }] };
+    }
   );
 
-  console.error("[DOMShell] MCP server created with all tool registrations");
+  console.error(`[DOMShell] MCP server created (${GRANULAR ? "granular" : "single-tool"} mode)`);
   return server;
 }
 
@@ -1045,6 +1061,7 @@ async function main() {
     log(`  connect ${AUTH_TOKEN}`);
     log("");
     log(`Security: write=${ALLOW_WRITE ? "ON" : "OFF"}, sensitive=${ALLOW_SENSITIVE ? "ON" : "OFF"}, confirm=${!NO_CONFIRM ? "ON" : "OFF"}`);
+    log(`Tools: ${GRANULAR ? "granular (38 per-command tools)" : "single-tool (domshell_execute) — pass --granular for the per-command tools"}`);
     if (ALLOWED_DOMAINS.length > 0) {
       log(`Domains: ${ALLOWED_DOMAINS.join(", ")}`);
     } else {

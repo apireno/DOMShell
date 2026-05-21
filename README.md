@@ -205,6 +205,8 @@ dom@shell:~$ group close
 
 Subcommands: `group` (status), `group new [name]`, `group attach <id>`, `group detach`, `group close`, `group list`. Isolated mode keeps the agent out of your other tabs; shared mode is the default and unchanged.
 
+When an MCP client connects, DOMShell automatically gives that session its own fresh `🐚 agent` group. The group is **left open** when the session disconnects (non-destructive) — the agent is instructed to ask whether you'd like it closed before it wraps up, and you can always clear leftovers yourself with `group close`.
+
 ### Navigating the DOM
 
 Once you're inside a tab, the Accessibility Tree appears as a filesystem:

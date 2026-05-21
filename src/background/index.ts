@@ -537,7 +537,7 @@ chrome.runtime.onConnect.addListener((port) => {
       const output = await executeCommand(msg.input);
       port.postMessage({ type: "STDOUT", output, prompt: currentPrompt() });
     } else if (msg.type === "COMPLETE") {
-      const matches = getCompletions(msg.partial, msg.command);
+      const matches = await getCompletions(msg.partial, msg.command, msg.line);
       port.postMessage({ type: "COMPLETE_RESPONSE", matches, partial: msg.partial });
     } else if (msg.type === "READY") {
       await maybeAutoAttach();
@@ -1787,11 +1787,39 @@ const COMMANDS = [
   "functions", "call", "watch", "for", "script", "each",
 ];
 
-function getCompletions(partial: string, command: string): string[] {
+async function getCompletions(partial: string, command: string, line: string = ""): Promise<string[]> {
   // If no command yet (completing the command name itself)
   if (!command || command === partial) {
     const lower = partial.toLowerCase();
     return COMMANDS.filter((c) => c.startsWith(lower));
+  }
+
+  // group: complete subcommands, and group targets for `attach` / `close`
+  if (command === "group") {
+    const parts = line.split(/\s+/);
+    const sub = (parts[1] ?? "").toLowerCase();
+    // "group <partial>" — complete the subcommand
+    if (parts.length <= 2 && (parts[1] ?? "") === partial) {
+      return ["new", "attach", "detach", "close", "list"].filter((s) => s.startsWith(partial.toLowerCase()));
+    }
+    // "group attach <partial>" / "group close <partial>" — complete a group id or name
+    if (sub === "attach" || sub === "close") {
+      try {
+        const groups = await chrome.tabGroups.query({});
+        const lower = partial.toLowerCase();
+        const out: string[] = [];
+        for (const g of groups) {
+          const idStr = String(g.id);
+          if (idStr.startsWith(partial)) out.push(idStr);
+          const name = cleanGroupName(g.title);
+          if (name.toLowerCase().startsWith(lower) && !out.includes(name)) out.push(name);
+        }
+        return out;
+      } catch {
+        return [];
+      }
+    }
+    return [];
   }
 
   // Path variable completion for cd
@@ -1799,14 +1827,30 @@ function getCompletions(partial: string, command: string): string[] {
     return ["%here%"].filter((v) => v.startsWith(partial));
   }
 
-  // For cd at browser level, complete browser-level names
+  // For cd at browser level
   if (command === "cd" && !isInsideTab()) {
     const lower = partial.toLowerCase();
     if (state.path.length === 0) {
       // At ~: complete "tabs" or "windows"
       return ["tabs/", "windows/"].filter((c) => c.toLowerCase().startsWith(lower));
     }
-    // At ~/tabs or ~/windows/<id>: could complete tab IDs but too dynamic
+    // At ~/tabs: complete tab IDs, scoped to the attached group.
+    if (state.path[0] === "tabs") {
+      try {
+        const wins = await chrome.windows.getAll({ populate: true });
+        const ids: string[] = [];
+        for (const w of wins) {
+          for (const t of w.tabs ?? []) {
+            if (!tabInScope(t)) continue;
+            const idStr = String(t.id ?? "");
+            if (idStr && idStr.startsWith(partial)) ids.push(idStr);
+          }
+        }
+        return ids;
+      } catch {
+        return [];
+      }
+    }
     return [];
   }
 

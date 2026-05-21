@@ -177,7 +177,7 @@ export default function Terminal() {
     }
 
     completionPending.current = true;
-    port.postMessage({ type: "COMPLETE", partial, command });
+    port.postMessage({ type: "COMPLETE", partial, command, line });
   }
 
   function handleCompletionResponse(

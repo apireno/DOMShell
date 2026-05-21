@@ -40,6 +40,7 @@ let createdTabIds = new Set<number>();    // tabs DOMShell opened (non-destructi
 let sessionGroupDisrupted = false;        // session group removed externally (ADR-001 D7)
 let groupSeq = 0;                         // disambiguates default group names
 let sessionGroupName: string | null = null; // attached group's display name (prompt host)
+let mcpSessionActive = false;             // an MCP session created the current group (ADR-001 D3)
 
 /** Lazy cache for visible text (innerText), keyed by backendDOMNodeId. Cleared on tree rebuild. */
 let textContentCache: Map<number, string> = new Map();
@@ -286,6 +287,14 @@ function wsConnect(): void {
       startKeepaliveAlarm();
       console.log("[DOMShell] WebSocket connected to MCP server");
 
+      // Capability handshake (ADR-001 D11) — let a grouping-aware MCP server
+      // know this extension supports tab groups.
+      ws?.send(JSON.stringify({
+        type: "HELLO",
+        version: chrome.runtime.getManifest().version,
+        capabilities: ["grouping"],
+      }));
+
       // Start heartbeat to keep MV3 service worker alive
       if (wsHeartbeatTimer) clearInterval(wsHeartbeatTimer);
       wsHeartbeatTimer = setInterval(() => {
@@ -298,6 +307,24 @@ function wsConnect(): void {
     ws.onmessage = async (event) => {
       try {
         const msg = JSON.parse(typeof event.data === "string" ? event.data : "");
+
+        if (msg.type === "SESSION_START") {
+          // An MCP session started — give it its own isolated group (ADR-001 D3).
+          if (groupMode === "shared") {
+            await groupNew(["agent"]);
+            mcpSessionActive = true;
+          }
+          return;
+        }
+
+        if (msg.type === "SESSION_END") {
+          // Non-destructive teardown (PRD-001 Req 7) — detach, leave the group open.
+          if (mcpSessionActive) {
+            await groupDetach();
+            mcpSessionActive = false;
+          }
+          return;
+        }
 
         if (msg.type === "EXECUTE" && msg.command) {
           // Domain allowlist check

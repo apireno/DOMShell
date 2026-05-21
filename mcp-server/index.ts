@@ -130,6 +130,8 @@ function redactSensitiveOutput(command: string, output: string): string {
 // ---- WebSocket Server (Extension Bridge) ----
 
 let extensionClient: WebSocket | null = null;
+let extensionGrouping = false;                 // connected extension supports tab grouping? (HELLO, ADR-001 D11)
+let activeMcpSessionId: string | null = null;  // single-session enforcement (ADR-001 D5)
 const pendingRequests = new Map<
   string,
   { resolve: (result: string) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }
@@ -185,6 +187,14 @@ wss.on("connection", (ws, req) => {
           pendingRequests.delete(msg.id);
           pending.resolve(msg.result ?? "");
         }
+      } else if (msg.type === "HELLO") {
+        // Capability handshake (ADR-001 D11).
+        extensionGrouping = Array.isArray(msg.capabilities) && msg.capabilities.includes("grouping");
+        log(`Extension v${msg.version ?? "?"} connected — grouping ${extensionGrouping ? "supported" : "NOT supported (legacy mode)"}`);
+        // If a session is already active, (re)announce it to the freshly-connected extension.
+        if (activeMcpSessionId && extensionGrouping) {
+          sendToExtension({ type: "SESSION_START", sessionId: activeMcpSessionId, mode: "isolated" });
+        }
       } else if (msg.type === "pong") {
         // Heartbeat response — ignore
       }
@@ -209,6 +219,13 @@ wss.on("connection", (ws, req) => {
 });
 
 // ---- Send Command to Extension ----
+
+/** Fire-and-forget a control message to the extension (SESSION_START/END, etc.). */
+function sendToExtension(obj: Record<string, unknown>): void {
+  if (extensionClient && extensionClient.readyState === 1) {
+    extensionClient.send(JSON.stringify(obj));
+  }
+}
 
 function sendCommand(command: string): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -997,11 +1014,26 @@ async function main() {
 
       // New session — must be an initialize request
       if (!sessionId && isInitializeRequest(req.body)) {
+        // Single-session enforcement (ADR-001 D5): reject a 2nd concurrent client.
+        if (activeMcpSessionId) {
+          res.status(409).json({
+            jsonrpc: "2.0",
+            error: { code: -32000, message: "DOMShell MCP server is single-session — another client is already connected. Disconnect it first." },
+            id: null,
+          });
+          return;
+        }
+
         const transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (sid) => {
             log(`MCP session initialized: ${sid}`);
             transports[sid] = transport;
+            activeMcpSessionId = sid;
+            // Give this session its own isolated tab group (ADR-001 D3).
+            if (extensionGrouping) {
+              sendToExtension({ type: "SESSION_START", sessionId: sid, mode: "isolated" });
+            }
           },
         });
 
@@ -1010,6 +1042,10 @@ async function main() {
           if (sid) {
             log(`MCP session closed: ${sid}`);
             delete transports[sid];
+            if (activeMcpSessionId === sid) {
+              activeMcpSessionId = null;
+              sendToExtension({ type: "SESSION_END", sessionId: sid });
+            }
           }
         };
 

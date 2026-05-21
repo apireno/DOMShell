@@ -190,9 +190,10 @@ wss.on("connection", (ws, req) => {
       } else if (msg.type === "HELLO") {
         // Capability handshake (ADR-001 D11).
         extensionGrouping = Array.isArray(msg.capabilities) && msg.capabilities.includes("grouping");
-        log(`Extension v${msg.version ?? "?"} connected — grouping ${extensionGrouping ? "supported" : "NOT supported (legacy mode)"}`);
+        log(`Extension v${msg.version ?? "?"} (build: ${msg.build ?? "unknown"}) connected — grouping ${extensionGrouping ? "supported" : "NOT supported (legacy mode)"}`);
         // If a session is already active, (re)announce it to the freshly-connected extension.
         if (activeMcpSessionId && extensionGrouping) {
+          log(`→ re-announcing SESSION_START to extension (session ${activeMcpSessionId})`);
           sendToExtension({ type: "SESSION_START", sessionId: activeMcpSessionId, mode: "isolated" });
         }
       } else if (msg.type === "pong") {
@@ -224,6 +225,8 @@ wss.on("connection", (ws, req) => {
 function sendToExtension(obj: Record<string, unknown>): void {
   if (extensionClient && extensionClient.readyState === 1) {
     extensionClient.send(JSON.stringify(obj));
+  } else {
+    log(`⚠ sendToExtension: dropped a '${obj.type ?? "?"}' message — extension socket not open`);
   }
 }
 
@@ -1054,7 +1057,10 @@ async function main() {
             activeMcpSessionId = sid;
             // Give this session its own isolated tab group (ADR-001 D3).
             if (extensionGrouping) {
+              log(`→ sending SESSION_START to extension (session ${sid})`);
               sendToExtension({ type: "SESSION_START", sessionId: sid, mode: "isolated" });
+            } else {
+              log(`→ SESSION_START deferred — extension not connected / grouping not negotiated yet`);
             }
           },
         });

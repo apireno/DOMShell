@@ -285,7 +285,7 @@ function wsConnect(): void {
       wsConnected = true;
       setWsStatus("connected");
       startKeepaliveAlarm();
-      console.log("[DOMShell] WebSocket connected to MCP server");
+      console.log(`[DOMShell] WebSocket connected to MCP server — extension v${chrome.runtime.getManifest().version} (build sprint-02-b3-diag)`);
 
       // Capability handshake (ADR-001 D11) — let a grouping-aware MCP server
       // know this extension supports tab groups.
@@ -293,6 +293,7 @@ function wsConnect(): void {
         type: "HELLO",
         version: chrome.runtime.getManifest().version,
         capabilities: ["grouping"],
+        build: "sprint-02-b3-diag",
       }));
 
       // Start heartbeat to keep MV3 service worker alive
@@ -315,11 +316,13 @@ function wsConnect(): void {
           // connect can restore stale "isolated" state (chrome.storage) — a
           // closed group, or a still-live leftover group from a prior session.
           // Reusing either would inherit stale tabs and the wrong group name.
+          console.log("[DOMShell] SESSION_START received — creating fresh 'agent' group");
           groupMode = "shared";
           sessionGroupId = null;
           sessionGroupName = null;
           sessionGroupDisrupted = false;
-          await groupNew(["agent"]);
+          const startResult = await groupNew(["agent"]);
+          console.log("[DOMShell] SESSION_START → groupNew:", startResult.replace(/\x1b\[[0-9;]*m/g, ""));
           mcpSessionActive = true;
           return;
         }

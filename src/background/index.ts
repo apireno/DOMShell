@@ -31,6 +31,14 @@ let commandHistory: string[] = [];
 let bookmarks: Record<string, string[]> = {};
 let scripts: Record<string, string[]> = {};
 
+// ---- Tab-group session state (PRD-001 / ADR-001) ----
+type GroupMode = "shared" | "isolated";
+let groupMode: GroupMode = "shared";
+let sessionGroupId: number | null = null;
+let createdGroupIds = new Set<number>();  // groups DOMShell created (ADR-001 D6)
+let createdTabIds = new Set<number>();    // tabs DOMShell opened (non-destructive close, ADR-001 D7)
+let sessionGroupDisrupted = false;        // session group removed externally (ADR-001 D7)
+
 /** Lazy cache for visible text (innerText), keyed by backendDOMNodeId. Cleared on tree rebuild. */
 let textContentCache: Map<number, string> = new Map();
 
@@ -79,6 +87,12 @@ function persistState(): void {
     domshell_bookmarks: bookmarks,
     domshell_scripts: scripts,
     domshell_history: commandHistory.slice(-500),
+    domshell_group: {
+      mode: groupMode,
+      groupId: sessionGroupId,
+      createdGroupIds: [...createdGroupIds],
+      createdTabIds: [...createdTabIds],
+    },
   });
 }
 
@@ -412,7 +426,7 @@ chrome.storage.local.get(["ws_enabled", "ws_token", "ws_port"], (result) => {
 
 // Restore shell state on service worker restart
 chrome.storage.local.get(
-  ["domshell_path", "domshell_env", "domshell_bookmarks", "domshell_scripts", "domshell_history"],
+  ["domshell_path", "domshell_env", "domshell_bookmarks", "domshell_scripts", "domshell_history", "domshell_group"],
   (result) => {
     if (Array.isArray(result.domshell_path)) {
       state.path = result.domshell_path;
@@ -430,6 +444,13 @@ chrome.storage.local.get(
     }
     if (Array.isArray(result.domshell_history)) {
       commandHistory = result.domshell_history.slice(-500);
+    }
+    if (result.domshell_group && typeof result.domshell_group === "object") {
+      const g: any = result.domshell_group;
+      groupMode = g.mode === "isolated" ? "isolated" : "shared";
+      sessionGroupId = typeof g.groupId === "number" ? g.groupId : null;
+      createdGroupIds = new Set(Array.isArray(g.createdGroupIds) ? g.createdGroupIds : []);
+      createdTabIds = new Set(Array.isArray(g.createdTabIds) ? g.createdTabIds : []);
     }
   }
 );
@@ -478,6 +499,15 @@ chrome.debugger.onEvent.addListener((source, method) => {
     method === "DOM.documentUpdated"
   ) {
     treeStale = true;
+  }
+});
+
+// ---- Tab-group disruption detection (ADR-001 D7) ----
+
+chrome.tabGroups?.onRemoved?.addListener((group) => {
+  createdGroupIds.delete(group.id);
+  if (group.id === sessionGroupId) {
+    sessionGroupDisrupted = true;
   }
 });
 
@@ -946,6 +976,24 @@ const COMMAND_HELP: Record<string, string> = {
     "",
     "\x1b[33mArguments:\x1b[0m",
     "  depth    Max depth to display (default: 2)",
+  ].join("\r\n"),
+
+  group: [
+    "\x1b[1;36mgroup\x1b[0m \u2014 Tab-group session isolation (PRD-001)",
+    "",
+    "\x1b[33mUsage:\x1b[0m group [new|attach|detach|close|list]",
+    "",
+    "\x1b[33mSubcommands:\x1b[0m",
+    "  \x1b[32mgroup\x1b[0m                Show the current grouping mode and group",
+    "  \x1b[32mgroup new [name]\x1b[0m     Create an isolated tab group and work inside it",
+    "  \x1b[32mgroup attach <id>\x1b[0m    Bind to an existing DOMShell-created group",
+    "  \x1b[32mgroup detach\x1b[0m         Leave the group; return to shared mode",
+    "  \x1b[32mgroup close\x1b[0m          Close the group's DOMShell tabs (user tabs kept)",
+    "  \x1b[32mgroup list\x1b[0m           List DOMShell-created groups",
+    "",
+    "In an isolated group every command is confined to that group's tabs,",
+    "so you can keep browsing freely in other tabs. Shared mode is the",
+    "default and behaves exactly as before.",
   ].join("\r\n"),
 
   read: [
@@ -1458,6 +1506,8 @@ async function executeCommand(raw: string): Promise<string> {
         return await handleTabs();
       case "windows":
         return await handleWindows();
+      case "group":
+        return await handleGroup(args);
       case "ls":
         return await handleLs(args);
       case "cd": {
@@ -1588,6 +1638,7 @@ function handleHelp(): string {
     "  \x1b[32mcd tabs/<id>\x1b[0m       Enter a tab (by ID or name pattern)",
     "  \x1b[32mcd %here%\x1b[0m          Enter the focused tab (composable: %here%/.., %here%/main)",
     "  \x1b[32mcd ~\x1b[0m or \x1b[32mcd /\x1b[0m       Go to browser root",
+    "  \x1b[32mgroup\x1b[0m              Tab-group session: new|attach|detach|close|list",
     "",
     "\x1b[1;33mNavigation:\x1b[0m",
     "  \x1b[32mnavigate <url>\x1b[0m     Navigate the current tab to a URL",
@@ -2261,6 +2312,20 @@ async function enterTab(target: string): Promise<string> {
   try {
     const tab = await resolveTabTarget(target);
     if (!tab?.id) return `\x1b[31mcd: Tab has no ID.\x1b[0m`;
+
+    // Scope guard (ADR-001 D3): in an isolated group, only the group's tabs are reachable.
+    if (groupMode === "isolated") {
+      if (sessionGroupId === null) {
+        return "\x1b[31mcd: isolated mode has no group bound. Run 'group detach' or 'group new'.\x1b[0m";
+      }
+      if (sessionGroupDisrupted) {
+        return "\x1b[31mcd: the session group was closed or changed externally. Run 'group detach' or 'group new'.\x1b[0m";
+      }
+      if (tab.groupId !== sessionGroupId) {
+        return `\x1b[31mcd: tab ${tab.id} is outside the session group (id ${sessionGroupId}). ` +
+          `Commands are confined to the group — run 'group detach' to leave isolated mode.\x1b[0m`;
+      }
+    }
 
     // Push tab ID onto path
     state.path.push(String(tab.id));
@@ -2977,6 +3042,186 @@ async function handleScript(rawArgs: string): Promise<string> {
   }
 
   return `\x1b[31mscript: unknown subcommand '${sub}'. Use: list, save, show, run, delete\x1b[0m`;
+}
+
+// ---- group (tab-group session isolation, PRD-001 / ADR-001) ----
+
+async function handleGroup(args: string[]): Promise<string> {
+  const sub = (args[0] || "").toLowerCase();
+  if (!sub || sub === "status") return await groupStatus();
+  if (sub === "new") return await groupNew(args.slice(1));
+  if (sub === "attach") return await groupAttach(args.slice(1));
+  if (sub === "detach") return await groupDetach();
+  if (sub === "close") return await groupClose();
+  if (sub === "list") return await groupList();
+  return `\x1b[31mgroup: unknown subcommand '${sub}'. Use: new, attach, detach, close, list\x1b[0m`;
+}
+
+async function groupStatus(): Promise<string> {
+  if (groupMode === "shared") {
+    return [
+      "\x1b[1;36mGroup mode:\x1b[0m \x1b[37mshared\x1b[0m — operating on the general browser",
+      "\x1b[90mRun 'group new [name]' to work in an isolated tab group.\x1b[0m",
+    ].join("\r\n");
+  }
+  if (sessionGroupId === null) {
+    return "\x1b[31mgroup: isolated mode with no group bound. Run 'group detach' to reset.\x1b[0m";
+  }
+  try {
+    const g = await chrome.tabGroups.get(sessionGroupId);
+    const tabs = await chrome.tabs.query({ groupId: sessionGroupId });
+    return [
+      "\x1b[1;36mGroup mode:\x1b[0m \x1b[32misolated\x1b[0m",
+      `  \x1b[37mGroup: ${g.title ?? "(untitled)"}  [id ${sessionGroupId}]\x1b[0m`,
+      `  \x1b[37mTabs:  ${tabs.length}\x1b[0m`,
+      "  \x1b[90mEvery command is confined to this group.\x1b[0m",
+    ].join("\r\n");
+  } catch {
+    sessionGroupDisrupted = true;
+    return `\x1b[31mgroup: the session group (id ${sessionGroupId}) no longer exists. ` +
+      `Run 'group detach' to return to shared mode, or 'group new'.\x1b[0m`;
+  }
+}
+
+async function groupNew(rest: string[]): Promise<string> {
+  const name = rest.join(" ").trim();
+  const tab = await chrome.tabs.create({ url: "about:blank", active: false });
+  if (!tab.id) return "\x1b[31mgroup new: failed to create a working tab.\x1b[0m";
+  createdTabIds.add(tab.id);
+  let gid: number;
+  try {
+    gid = await chrome.tabs.group({ tabIds: [tab.id] });
+  } catch (err: any) {
+    return `\x1b[31mgroup new: failed to create group: ${err.message}\x1b[0m`;
+  }
+  const title = name ? `\u{1F41A} ${name}` : "\u{1F41A} DOMShell";
+  try {
+    await chrome.tabGroups.update(gid, { title, color: "cyan" });
+  } catch { /* labeling is best-effort */ }
+  createdGroupIds.add(gid);
+  groupMode = "isolated";
+  sessionGroupId = gid;
+  sessionGroupDisrupted = false;
+  try { await cdpSwitchToTab(tab.id); } catch { /* blank tab — attach lazily later */ }
+  state.path = ["tabs", String(tab.id)];
+  persistState();
+  return [
+    `\x1b[32m✓ Created isolated group '${title}'  [id ${gid}]\x1b[0m`,
+    `  \x1b[37mWorking tab: ${tab.id}\x1b[0m`,
+    "  \x1b[90mCommands are now confined to this group. Run 'group detach' to leave.\x1b[0m",
+    "",
+  ].join("\r\n");
+}
+
+async function groupAttach(rest: string[]): Promise<string> {
+  const target = rest.join(" ").trim();
+  if (!target) return "\x1b[31mgroup attach: specify a group id or name.\x1b[0m";
+
+  let gid: number | null = null;
+  const asId = parseInt(target, 10);
+  if (!isNaN(asId) && createdGroupIds.has(asId)) {
+    gid = asId;
+  } else {
+    for (const id of createdGroupIds) {
+      try {
+        const g = await chrome.tabGroups.get(id);
+        if ((g.title ?? "").toLowerCase().includes(target.toLowerCase())) { gid = id; break; }
+      } catch { createdGroupIds.delete(id); }
+    }
+  }
+
+  if (gid === null) {
+    if (!isNaN(asId)) {
+      return `\x1b[31mgroup attach: '${target}' is not a DOMShell-created group. ` +
+        `'attach' only binds to groups DOMShell created (see 'group list'). ` +
+        `To act on your own tabs, stay in shared mode.\x1b[0m`;
+    }
+    return `\x1b[31mgroup attach: no DOMShell group matching '${target}'. See 'group list'.\x1b[0m`;
+  }
+
+  let tabs: chrome.tabs.Tab[];
+  try {
+    tabs = await chrome.tabs.query({ groupId: gid });
+  } catch {
+    createdGroupIds.delete(gid);
+    return `\x1b[31mgroup attach: group ${gid} no longer exists.\x1b[0m`;
+  }
+  if (tabs.length === 0) return `\x1b[31mgroup attach: group ${gid} has no tabs.\x1b[0m`;
+
+  groupMode = "isolated";
+  sessionGroupId = gid;
+  sessionGroupDisrupted = false;
+  const first = tabs[0];
+  if (first.id !== undefined) {
+    try { await cdpSwitchToTab(first.id); } catch { /* ignore */ }
+    state.path = ["tabs", String(first.id)];
+  }
+  persistState();
+  let title = String(gid);
+  try { title = (await chrome.tabGroups.get(gid)).title ?? String(gid); } catch { /* ignore */ }
+  return `\x1b[32m✓ Attached to group '${title}'  [id ${gid}]  (${tabs.length} tab${tabs.length === 1 ? "" : "s"}).\x1b[0m`;
+}
+
+async function groupDetach(): Promise<string> {
+  if (groupMode === "shared") return "\x1b[90mAlready in shared mode.\x1b[0m";
+  const prev = sessionGroupId;
+  groupMode = "shared";
+  sessionGroupId = null;
+  sessionGroupDisrupted = false;
+  persistState();
+  return `\x1b[32m✓ Detached from group ${prev ?? ""}. ` +
+    `Now in shared mode — the group and its tabs are left intact.\x1b[0m`;
+}
+
+async function groupClose(): Promise<string> {
+  if (groupMode !== "isolated" || sessionGroupId === null) {
+    return "\x1b[31mgroup close: not in an isolated group. Run 'group new' first.\x1b[0m";
+  }
+  const gid = sessionGroupId;
+  let tabs: chrome.tabs.Tab[] = [];
+  try { tabs = await chrome.tabs.query({ groupId: gid }); } catch { /* group already gone */ }
+
+  const toClose: number[] = [];
+  let kept = 0;
+  for (const t of tabs) {
+    if (t.id !== undefined && createdTabIds.has(t.id)) toClose.push(t.id);
+    else kept++;
+  }
+  if (toClose.length > 0) {
+    try { await chrome.tabs.remove(toClose); } catch { /* ignore */ }
+    for (const id of toClose) createdTabIds.delete(id);
+  }
+  createdGroupIds.delete(gid);
+  groupMode = "shared";
+  sessionGroupId = null;
+  sessionGroupDisrupted = false;
+  state.path = [];
+  state.axNodeIds = [];
+  persistState();
+  const keptMsg = kept > 0
+    ? ` \x1b[33m${kept} user-added tab${kept === 1 ? "" : "s"} left open.\x1b[0m`
+    : "";
+  return `\x1b[32m✓ Closed group ${gid} — removed ${toClose.length} DOMShell tab${toClose.length === 1 ? "" : "s"}.\x1b[0m${keptMsg}`;
+}
+
+async function groupList(): Promise<string> {
+  if (createdGroupIds.size === 0) return "\x1b[90m(no DOMShell groups)\x1b[0m";
+  const lines = ["\x1b[1;36mDOMShell groups:\x1b[0m"];
+  const stale: number[] = [];
+  for (const id of createdGroupIds) {
+    try {
+      const g = await chrome.tabGroups.get(id);
+      const tabs = await chrome.tabs.query({ groupId: id });
+      const marker = id === sessionGroupId ? "  \x1b[32m(active)\x1b[0m" : "";
+      lines.push(`  \x1b[37m${g.title ?? "(untitled)"}\x1b[0m  [id ${id}]  ${tabs.length} tab${tabs.length === 1 ? "" : "s"}${marker}`);
+    } catch {
+      stale.push(id);
+    }
+  }
+  for (const id of stale) createdGroupIds.delete(id);
+  if (stale.length > 0) persistState();
+  if (lines.length === 1) return "\x1b[90m(no DOMShell groups)\x1b[0m";
+  return lines.join("\r\n");
 }
 
 // ---- each (multi-tab) ----
@@ -4166,9 +4411,17 @@ async function handleOpen(args: string[]): Promise<string> {
     url = "https://" + url;
   }
 
-  // Create new tab
-  const tab = await chrome.tabs.create({ url, active: true });
+  // Create new tab. In an isolated group, open it inactive (no focus steal,
+  // ADR-001 D8) and add it to the session group so scoping holds.
+  const isolated = groupMode === "isolated" && sessionGroupId !== null;
+  const tab = await chrome.tabs.create({ url, active: !isolated });
   if (!tab.id) return "\x1b[31mError: Failed to create tab.\x1b[0m";
+  if (isolated) {
+    createdTabIds.add(tab.id);
+    try {
+      await chrome.tabs.group({ tabIds: [tab.id], groupId: sessionGroupId! });
+    } catch { /* group may be gone; the scope guard will surface it */ }
+  }
 
   // Wait for load
   await new Promise<void>((resolve) => {

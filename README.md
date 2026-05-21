@@ -175,6 +175,36 @@ dom@shell:~$ open https://github.com
   AX Nodes: 412
 ```
 
+### Tab Groups (isolation)
+
+By default DOMShell operates on your general browser — **shared mode**, exactly as before. The `group` command puts a session in its own **isolated Chrome tab group**, so the agent works in a clearly-marked lane while you keep browsing freely in other tabs:
+
+```bash
+# Create an isolated tab group and work inside it
+dom@shell:~$ group new research
+✓ Created isolated group '🐚 research'  [id 4]
+  Working tab: 312
+
+# While isolated, every command is confined to the group's tabs —
+# entering a tab outside the group is rejected:
+dom@shell:~$ cd tabs/126
+cd: tab 126 is outside the session group (id 4). ...
+
+# Show the current mode and group
+dom@shell:~$ group
+Group mode: isolated
+  Group: 🐚 research  [id 4]
+  Tabs:  1
+
+# Leave the group (it stays open) — back to shared mode
+dom@shell:~$ group detach
+
+# Close the group's DOMShell tabs (your own tabs are kept)
+dom@shell:~$ group close
+```
+
+Subcommands: `group` (status), `group new [name]`, `group attach <id>`, `group detach`, `group close`, `group list`. Isolated mode keeps the agent out of your other tabs; shared mode is the default and unchanged.
+
 ### Navigating the DOM
 
 Once you're inside a tab, the Accessibility Tree appears as a filesystem:

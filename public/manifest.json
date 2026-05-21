@@ -8,7 +8,8 @@
     "debugger",
     "cookies",
     "storage",
-    "alarms"
+    "alarms",
+    "tabGroups"
   ],
   "minimum_chrome_version": "116",
   "host_permissions": ["<all_urls>"],

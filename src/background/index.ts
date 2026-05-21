@@ -439,8 +439,13 @@ chrome.storage.local.get(
   (result) => {
     if (Array.isArray(result.domshell_path)) {
       state.path = result.domshell_path;
-      // Don't restore activeTabId or axNodeIds — CDP attachment is ephemeral.
-      // ensureInsideTab() will guide re-entry on next command.
+      // A path inside a tab needs a live CDP attachment, which does not survive
+      // a service-worker restart. Drop such paths to the browser root so the
+      // shell always starts somewhere usable — `ls` shows windows/ and tabs/.
+      // Browser-level paths (root, tabs/, windows/) restore fine.
+      if (getTabIdFromPath(state.path) !== null) {
+        state.path = [];
+      }
     }
     if (result.domshell_env && typeof result.domshell_env === "object") {
       state.env = { ...state.env, ...result.domshell_env };

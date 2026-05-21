@@ -308,7 +308,7 @@ JavaScript: eval <expr> (read-only, always available) · js <code> (write tier) 
 Workflow: watch <cmd> [--until-change] · for "<cmd>" : <template> · script save|run|list|show|delete · each [--pattern F] <cmd> · bookmark <name> · env · export · history · pwd · refresh
 
 TAB GROUPS (isolation)
-DOMShell can run inside an isolated Chrome tab group — its own lane, separate from the user's other tabs. Run "group" to see the current mode. "group new [name]" creates an isolated group; "group attach <id>", "group detach", "group close", "group list" manage them. While in an isolated group, tabs / windows / cd are ALL confined to that group — you only see and act on the group's tabs. Run "group" anytime to check whether you are scoped.
+DOMShell can run inside an isolated Chrome tab group — its own lane, separate from the user's other tabs. Run "group" to see the current mode. "group new [name]" creates an isolated group; "group attach <id>", "group detach", "group close", "group list" manage them. While in an isolated group, tabs / windows / cd are ALL confined to that group — you only see and act on the group's tabs. Run "group" anytime to check whether you are scoped. The session's group is left open after you disconnect — when you finish a task, it is courteous to ask the user whether they want it closed ("group close") rather than leaving it behind for them.
 
 WHEN TO USE DOMSHELL (prefer over native browser tools):
 - Navigating to websites: use domshell_navigate or domshell_open
@@ -961,6 +961,7 @@ NOTES
 - "cd .." moves up one level; from a tab's root it exits to the browser level.
 - Run "help" for the full command list, or "<command> --help" for one command's usage.
 - The session may run in an isolated tab group — run "group" to check; commands are then confined to that group.
+- The session's "agent" tab group is left open after you disconnect. When you finish a task, it is courteous to ask the user whether to close it — run "group close" only if they say yes.
 - Write and sensitive commands obey the server's security tiers.`,
     { command: z.string().describe("A DOMShell command, or multiple commands separated by newlines (e.g. 'ls -l' or 'open example.com\\ncd main\\ntext')") },
     async ({ command }) => {

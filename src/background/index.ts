@@ -309,29 +309,17 @@ function wsConnect(): void {
         const msg = JSON.parse(typeof event.data === "string" ? event.data : "");
 
         if (msg.type === "SESSION_START") {
-          // An MCP session started — give it its own isolated group (ADR-001 D3).
-          // `groupMode`/`sessionGroupId` are persisted (chrome.storage), so on a
-          // fresh connect we may be restored into a stale "isolated" state whose
-          // group was closed between sessions. Create a fresh group when we are
-          // shared OR when the restored session group no longer exists.
-          let groupAlive = false;
-          if (groupMode === "isolated" && sessionGroupId !== null) {
-            try {
-              await chrome.tabGroups.get(sessionGroupId);
-              groupAlive = true;
-            } catch {
-              groupAlive = false;  // persisted group was closed between sessions
-            }
-          }
-          if (!groupAlive) {
-            // Clear stale isolated state so groupNew() doesn't report a phantom
-            // "previous group" and starts cleanly.
-            groupMode = "shared";
-            sessionGroupId = null;
-            sessionGroupName = null;
-            sessionGroupDisrupted = false;
-            await groupNew(["agent"]);
-          }
+          // An MCP session started — give it a fresh isolated group (ADR-001 D3).
+          // SESSION_START fires once per MCP client session, so each session
+          // gets its own clean lane. Discard any persisted state first: a fresh
+          // connect can restore stale "isolated" state (chrome.storage) — a
+          // closed group, or a still-live leftover group from a prior session.
+          // Reusing either would inherit stale tabs and the wrong group name.
+          groupMode = "shared";
+          sessionGroupId = null;
+          sessionGroupName = null;
+          sessionGroupDisrupted = false;
+          await groupNew(["agent"]);
           mcpSessionActive = true;
           return;
         }

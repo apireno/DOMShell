@@ -2073,15 +2073,19 @@ async function listBrowserLevel(browserPath: string[]): Promise<string> {
   if (browserPath.length === 0) {
     // Browser root: show windows/ and tabs/ directories
     const totalTabs = allWindows.reduce((sum, w) => sum + (w.tabs ?? []).filter(tabInScope).length, 0);
+    // A group lives in one window \u2014 count only windows that hold in-scope tabs.
+    const visibleWindows = allWindows.filter((w) => (w.tabs ?? []).some(tabInScope)).length;
     const lines = [
-      `  \x1b[1;34mwindows/\x1b[0m       \x1b[90m(${allWindows.length} windows)\x1b[0m`,
+      `  \x1b[1;34mwindows/\x1b[0m       \x1b[90m(${visibleWindows} windows)\x1b[0m`,
       `  \x1b[1;34mtabs/\x1b[0m          \x1b[90m(${totalTabs} tabs)\x1b[0m`,
     ];
     if (state.activeTabId) {
       try {
         const tab = await chrome.tabs.get(state.activeTabId);
-        lines.push("");
-        lines.push(`  \x1b[90mActive tab: ${tab.id} \u2014 ${tab.title ?? "unknown"} (${tab.url ?? ""})\x1b[0m`);
+        if (tabInScope(tab)) {
+          lines.push("");
+          lines.push(`  \x1b[90mActive tab: ${tab.id} \u2014 ${tab.title ?? "unknown"} (${tab.url ?? ""})\x1b[0m`);
+        }
       } catch { /* tab gone */ }
     }
     return lines.join("\r\n");
@@ -3228,8 +3232,10 @@ async function groupNew(rest: string[]): Promise<string> {
   sessionGroupId = gid;
   sessionGroupName = cleanGroupName(title);
   sessionGroupDisrupted = false;
-  try { await cdpSwitchToTab(tab.id); } catch { /* blank tab — attach lazily later */ }
-  state.path = ["tabs", String(tab.id)];
+  // Land at the group's tab-listing level (not inside the blank working tab),
+  // so `ls` shows the group's tabs right away.
+  state.path = ["tabs"];
+  state.axNodeIds = [];
   persistState();
   const lines = [
     `\x1b[32m✓ Created isolated group '${title}'  [id ${gid}]\x1b[0m`,
@@ -3238,7 +3244,7 @@ async function groupNew(rest: string[]): Promise<string> {
   if (previousGroupId !== null) {
     lines.push(`  \x1b[33mPrevious group [id ${previousGroupId}] left open — 'group attach ${previousGroupId}' to return to it.\x1b[0m`);
   }
-  lines.push("  \x1b[90mCommands are now confined to this group. Run 'group detach' to leave.\x1b[0m");
+  lines.push("  \x1b[90mAttached — 'ls' lists this group's tabs, 'cd <id>' enters one, 'group detach' leaves.\x1b[0m");
   lines.push("");
   return lines.join("\r\n");
 }
@@ -3279,14 +3285,12 @@ async function groupAttach(rest: string[]): Promise<string> {
   sessionGroupId = gid;
   sessionGroupName = cleanGroupName(match.title);
   sessionGroupDisrupted = false;
-  const first = tabs[0];
-  if (first.id !== undefined) {
-    try { await cdpSwitchToTab(first.id); } catch { /* ignore */ }
-    state.path = ["tabs", String(first.id)];
-  }
+  // Land at the group's tab-listing level so `ls` shows the group's tabs.
+  state.path = ["tabs"];
+  state.axNodeIds = [];
   persistState();
   return `\x1b[32m✓ Attached to '${match.title ?? gid}'  [id ${gid}]  ` +
-    `(${tabs.length} tab${tabs.length === 1 ? "" : "s"}). Prompt is now dom@${sessionGroupName}.\x1b[0m`;
+    `(${tabs.length} tab${tabs.length === 1 ? "" : "s"}). Prompt is now dom@${sessionGroupName} — 'ls' lists the group's tabs.\x1b[0m`;
 }
 
 async function groupDetach(): Promise<string> {

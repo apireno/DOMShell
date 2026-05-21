@@ -1031,7 +1031,44 @@ dom@shell:$ disconnect
 ✓ Disconnected from MCP server.
 ```
 
-### MCP Tools Reference
+### The `domshell_execute` interface
+
+DOMShell's MCP server exposes a **single tool by default — `domshell_execute`** — the recommended way to drive DOMShell. You pass a command string, exactly as you would type it in the DOMShell terminal:
+
+```
+domshell_execute("ls")
+domshell_execute("cd tabs/4815")
+domshell_execute("find --type link --meta")
+```
+
+**Multi-command calls.** Pass several commands separated by newlines and they run in sequence, with the combined output returned — a whole workflow in one tool call:
+
+```
+domshell_execute("open https://example.com
+cd main
+text")
+```
+
+One round-trip instead of three, and fewer tool-call cycles.
+
+**Two modes:**
+
+| Mode | Tools exposed | Use when |
+|------|---------------|----------|
+| **Single-tool** (default) | `domshell_execute` only | Normal use. One approval covers the whole session — no per-command prompts. |
+| **Granular** (`--granular`) | 38 per-command tools (`domshell_ls`, `domshell_click`, …) | You want your MCP client to prompt for approval *per operation type* — finer human oversight at the client layer. |
+
+Start the server with `--granular` for the per-command tools:
+
+```
+npx @apireno/domshell --granular
+```
+
+**Security is identical in both modes.** DOMShell's server-side tiers (`write` / `sensitive` / `confirm` — set by `--allow-write`, `--allow-sensitive`, `--no-confirm`) gate risky operations regardless of which tool issued the command. Granular mode does **not** add security — it adds an extra *approval prompt* in your MCP client per operation type. That's more human oversight, not more protection.
+
+### MCP Tools Reference (`--granular` mode)
+
+The table below lists the per-command tools exposed when the server runs with `--granular`. In the default single-tool mode, run the same commands through `domshell_execute` — the `Maps To` column shows the command string.
 
 | MCP Tool | Maps To | Tier |
 |----------|---------|------|

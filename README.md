@@ -1088,6 +1088,7 @@ dom@shell:$ disconnect
 - [x] **Structured output mode** — `--json` flag on commands for machine-parseable output (e.g. `ls --json`, `cat --json`, `find --json`, `diff --json`)
 - [x] **Session persistence** — save and restore shell state (path, env vars, bookmarks, history) across service worker restarts via `chrome.storage.local`
 - [x] **`diff`** — compare AX tree snapshots to see what changed after an action (auto-snapshots before click/submit/navigate)
+- [ ] **Session tab-group isolation** — each session's tabs are placed in a labeled Chrome tab group and every command is confined to that group, so the agent works in its own lane while you keep browsing freely in other tabs of the same window ([#32](https://github.com/apireno/DOMShell/issues/32))
 
 ### Platform
 

@@ -940,7 +940,28 @@ function createMcpServer(): McpServer {
 
   server.tool(
     "domshell_execute",
-    "Run DOMShell commands — the primary DOMShell interface. Send one command, or several separated by newlines to run a whole workflow in a single call (e.g. \"open example.com\\ncd main\\ntext\"). The pipe operator works within a command ('find --type link --meta | grep github'). Write and sensitive commands are subject to the usual security restrictions. See the server instructions for the full command reference.",
+    `Run DOMShell commands to browse and read web pages — the primary DOMShell interface. DOMShell maps a page's accessibility tree to a filesystem: containers are directories, interactive elements are files; browser windows and tabs are part of the same hierarchy.
+
+Send ONE command, or MULTIPLE commands separated by newlines to run a whole workflow in a single call:
+  open https://example.com
+  cd main
+  text
+The pipe operator works within a command: find --type link --meta | grep github
+Most commands accept relative paths, so a separate cd is rarely needed: text main/article, click form/submit_btn.
+
+COMMAND REFERENCE
+Browser & tabs: tabs · windows · here · cd <path> · open <url> · navigate <url> · back · forward · close [id] · group [new|attach|detach|close|list]
+Reading: ls [--meta --text --json] · cat <name> · text [name] [--links] · tree [depth] · read [name] · grep [-r] <pattern> · find [--type ROLE --meta --text] <pattern> · extract_links · extract_table <name> · screenshot · diff
+Interacting (write tier): click <name> · focus <name> · type <text> · select <name> <value> · scroll down|up|<name> · submit <input> <value> · wait <pattern>
+JavaScript: eval <expr> (read-only) · js <code> (write) · functions [pattern] · call <fn> <args>
+Workflow: watch <cmd> [--until-change] · for "<cmd>" : <template> · script save|run|list · each [--pattern F] <cmd> · bookmark <name> · env · history · pwd · help
+
+NOTES
+- Enter a tab with "cd tabs/<id>" from the browser root; "open <url>" already opens AND enters a new tab (no flags).
+- "cd .." moves up one level; from a tab's root it exits to the browser level.
+- Run "help" for the full command list, or "<command> --help" for one command's usage.
+- The session may run in an isolated tab group — run "group" to check; commands are then confined to that group.
+- Write and sensitive commands obey the server's security tiers.`,
     { command: z.string().describe("A DOMShell command, or multiple commands separated by newlines (e.g. 'ls -l' or 'open example.com\\ncd main\\ntext')") },
     async ({ command }) => {
       // Multi-command: each non-blank line runs in sequence (ADR-002 D3).

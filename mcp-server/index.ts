@@ -132,6 +132,7 @@ function redactSensitiveOutput(command: string, output: string): string {
 let extensionClient: WebSocket | null = null;
 let extensionGrouping = false;                 // connected extension supports tab grouping? (HELLO, ADR-001 D11)
 let activeMcpSessionId: string | null = null;  // single-session enforcement (ADR-001 D5)
+let sessionStartSent = false;                  // SESSION_START delivered for the active session? (once per session, never per reconnect)
 const pendingRequests = new Map<
   string,
   { resolve: (result: string) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }
@@ -191,10 +192,13 @@ wss.on("connection", (ws, req) => {
         // Capability handshake (ADR-001 D11).
         extensionGrouping = Array.isArray(msg.capabilities) && msg.capabilities.includes("grouping");
         log(`Extension v${msg.version ?? "?"} (build: ${msg.build ?? "unknown"}) connected — grouping ${extensionGrouping ? "supported" : "NOT supported (legacy mode)"}`);
-        // If a session is already active, (re)announce it to the freshly-connected extension.
-        if (activeMcpSessionId && extensionGrouping) {
-          log(`→ re-announcing SESSION_START to extension (session ${activeMcpSessionId})`);
-          sendToExtension({ type: "SESSION_START", sessionId: activeMcpSessionId, mode: "isolated" });
+        // Deliver SESSION_START once per session: if a session is active but
+        // SESSION_START has not reached the extension yet (it connected after
+        // the session began, or an earlier send dropped), send it now. NOT on
+        // every reconnect — doing that spawned a duplicate agent group each time.
+        if (activeMcpSessionId && extensionGrouping && !sessionStartSent) {
+          log(`→ delivering deferred SESSION_START to extension (session ${activeMcpSessionId})`);
+          sessionStartSent = sendToExtension({ type: "SESSION_START", sessionId: activeMcpSessionId, mode: "isolated" });
         }
       } else if (msg.type === "pong") {
         // Heartbeat response — ignore
@@ -222,12 +226,13 @@ wss.on("connection", (ws, req) => {
 // ---- Send Command to Extension ----
 
 /** Fire-and-forget a control message to the extension (SESSION_START/END, etc.). */
-function sendToExtension(obj: Record<string, unknown>): void {
+function sendToExtension(obj: Record<string, unknown>): boolean {
   if (extensionClient && extensionClient.readyState === 1) {
     extensionClient.send(JSON.stringify(obj));
-  } else {
-    log(`⚠ sendToExtension: dropped a '${obj.type ?? "?"}' message — extension socket not open`);
+    return true;
   }
+  log(`⚠ sendToExtension: dropped a '${obj.type ?? "?"}' message — extension socket not open`);
+  return false;
 }
 
 function sendCommand(command: string): Promise<string> {
@@ -1055,10 +1060,13 @@ async function main() {
             log(`MCP session initialized: ${sid}`);
             transports[sid] = transport;
             activeMcpSessionId = sid;
-            // Give this session its own isolated tab group (ADR-001 D3).
+            sessionStartSent = false;
+            // Give this session its own isolated tab group (ADR-001 D3). Sent
+            // exactly once per session; the HELLO handler retries only if this
+            // initial send drops (extension not yet connected).
             if (extensionGrouping) {
               log(`→ sending SESSION_START to extension (session ${sid})`);
-              sendToExtension({ type: "SESSION_START", sessionId: sid, mode: "isolated" });
+              sessionStartSent = sendToExtension({ type: "SESSION_START", sessionId: sid, mode: "isolated" });
             } else {
               log(`→ SESSION_START deferred — extension not connected / grouping not negotiated yet`);
             }
@@ -1072,6 +1080,7 @@ async function main() {
             delete transports[sid];
             if (activeMcpSessionId === sid) {
               activeMcpSessionId = null;
+              sessionStartSent = false;
               sendToExtension({ type: "SESSION_END", sessionId: sid });
             }
           }

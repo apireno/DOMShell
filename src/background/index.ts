@@ -305,7 +305,11 @@ function wsConnect(): void {
       }, 20000);
     };
 
-    ws.onmessage = async (event) => {
+    // Bridge messages are processed strictly one at a time. SESSION_START's
+    // groupNew() must fully finish before a following EXECUTE is handled —
+    // otherwise a command can observe the half-built (still "shared") state.
+    let bridgeMsgChain: Promise<void> = Promise.resolve();
+    const handleBridgeMessage = async (event: MessageEvent): Promise<void> => {
       try {
         const msg = JSON.parse(typeof event.data === "string" ? event.data : "");
 
@@ -373,6 +377,9 @@ function wsConnect(): void {
       } catch {
         // Ignore malformed messages
       }
+    };
+    ws.onmessage = (event) => {
+      bridgeMsgChain = bridgeMsgChain.then(() => handleBridgeMessage(event));
     };
 
     ws.onclose = () => {

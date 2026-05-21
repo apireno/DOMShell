@@ -38,6 +38,7 @@ let sessionGroupId: number | null = null;
 let createdGroupIds = new Set<number>();  // groups DOMShell created (ADR-001 D6)
 let createdTabIds = new Set<number>();    // tabs DOMShell opened (non-destructive close, ADR-001 D7)
 let sessionGroupDisrupted = false;        // session group removed externally (ADR-001 D7)
+let groupSeq = 0;                         // disambiguates default group names
 
 /** Lazy cache for visible text (innerText), keyed by backendDOMNodeId. Cleared on tree rebuild. */
 let textContentCache: Map<number, string> = new Map();
@@ -996,6 +997,12 @@ const COMMAND_HELP: Record<string, string> = {
     "default and behaves exactly as before.",
   ].join("\r\n"),
 
+  groups: [
+    "\x1b[1;36mgroups\x1b[0m — alias for 'group list' (list DOMShell-created groups).",
+    "",
+    "See 'group --help' for the full tab-group command.",
+  ].join("\r\n"),
+
   read: [
     "\x1b[1;36mread\x1b[0m \u2014 Structured subtree extraction (tree + content in one call)",
     "",
@@ -1508,6 +1515,8 @@ async function executeCommand(raw: string): Promise<string> {
         return await handleWindows();
       case "group":
         return await handleGroup(args);
+      case "groups":
+        return await groupList();
       case "ls":
         return await handleLs(args);
       case "cd": {
@@ -3084,6 +3093,10 @@ async function groupStatus(): Promise<string> {
 }
 
 async function groupNew(rest: string[]): Promise<string> {
+  // If already isolated, the previous group is left open — surface it, don't orphan it silently.
+  const previousGroupId =
+    (groupMode === "isolated" && sessionGroupId !== null && !sessionGroupDisrupted)
+      ? sessionGroupId : null;
   const name = rest.join(" ").trim();
   const tab = await chrome.tabs.create({ url: "about:blank", active: false });
   if (!tab.id) return "\x1b[31mgroup new: failed to create a working tab.\x1b[0m";
@@ -3094,7 +3107,7 @@ async function groupNew(rest: string[]): Promise<string> {
   } catch (err: any) {
     return `\x1b[31mgroup new: failed to create group: ${err.message}\x1b[0m`;
   }
-  const title = name ? `\u{1F41A} ${name}` : "\u{1F41A} DOMShell";
+  const title = name ? `\u{1F41A} ${name}` : `\u{1F41A} DOMShell ${++groupSeq}`;
   try {
     await chrome.tabGroups.update(gid, { title, color: "cyan" });
   } catch { /* labeling is best-effort */ }
@@ -3105,12 +3118,16 @@ async function groupNew(rest: string[]): Promise<string> {
   try { await cdpSwitchToTab(tab.id); } catch { /* blank tab — attach lazily later */ }
   state.path = ["tabs", String(tab.id)];
   persistState();
-  return [
+  const lines = [
     `\x1b[32m✓ Created isolated group '${title}'  [id ${gid}]\x1b[0m`,
     `  \x1b[37mWorking tab: ${tab.id}\x1b[0m`,
-    "  \x1b[90mCommands are now confined to this group. Run 'group detach' to leave.\x1b[0m",
-    "",
-  ].join("\r\n");
+  ];
+  if (previousGroupId !== null) {
+    lines.push(`  \x1b[33mPrevious group [id ${previousGroupId}] left open — 'group attach ${previousGroupId}' to return to it.\x1b[0m`);
+  }
+  lines.push("  \x1b[90mCommands are now confined to this group. Run 'group detach' to leave.\x1b[0m");
+  lines.push("");
+  return lines.join("\r\n");
 }
 
 async function groupAttach(rest: string[]): Promise<string> {

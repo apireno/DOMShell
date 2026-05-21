@@ -180,8 +180,14 @@ function getDomSegments(): string[] {
 /** Internal: attach CDP to a tab and build its AX tree. */
 async function cdpSwitchToTab(tabId: number): Promise<{ tab: chrome.tabs.Tab; nodeCount: number; iframeCount: number }> {
   if (state.activeTabId === tabId && nodeMap.size > 0) {
-    // Already attached — just return info
+    // Already attached — just return info.
     const tab = await chrome.tabs.get(tabId);
+    // Re-entering a tab via `cd` after `cd ..` clears axNodeIds; restore the DOM
+    // root so the next command has a context (fixes spurious "No DOM context").
+    if (state.axNodeIds.length === 0) {
+      const root = findRootNode(nodeMap);
+      state.axNodeIds = root ? [root.nodeId] : [];
+    }
     let iframeCount = 0;
     for (const node of nodeMap.values()) {
       const r = node.role?.value ?? "";
@@ -994,7 +1000,7 @@ const COMMAND_HELP: Record<string, string> = {
     "  \x1b[32mgroup new [name]\x1b[0m     Create an isolated tab group and work inside it",
     "  \x1b[32mgroup attach <id>\x1b[0m    Bind to an existing DOMShell-created group",
     "  \x1b[32mgroup detach\x1b[0m         Leave the group; return to shared mode",
-    "  \x1b[32mgroup close\x1b[0m          Close the group's DOMShell tabs (user tabs kept)",
+    "  \x1b[32mgroup close [id]\x1b[0m     Close a group's DOMShell tabs (user tabs kept)",
     "  \x1b[32mgroup list\x1b[0m           List DOMShell-created groups",
     "",
     "In an isolated group every command is confined to that group's tabs,",
@@ -3109,7 +3115,7 @@ async function handleGroup(args: string[]): Promise<string> {
   if (sub === "new") return await groupNew(args.slice(1));
   if (sub === "attach") return await groupAttach(args.slice(1));
   if (sub === "detach") return await groupDetach();
-  if (sub === "close") return await groupClose();
+  if (sub === "close") return await groupClose(args.slice(1));
   if (sub === "list") return await groupList();
   return `\x1b[31mgroup: unknown subcommand '${sub}'. Use: new, attach, detach, close, list\x1b[0m`;
 }
@@ -3237,11 +3243,29 @@ async function groupDetach(): Promise<string> {
     `The group and its tabs are left intact.\x1b[0m`;
 }
 
-async function groupClose(): Promise<string> {
-  if (groupMode !== "isolated" || sessionGroupId === null) {
-    return "\x1b[31mgroup close: not in an isolated group. Run 'group new' first.\x1b[0m";
+async function groupClose(rest: string[]): Promise<string> {
+  const arg = rest.join(" ").trim();
+  let gid: number;
+  if (arg) {
+    const asId = parseInt(arg, 10);
+    if (!isNaN(asId)) {
+      gid = asId;
+    } else {
+      let resolved: number | null = null;
+      try {
+        const groups = await chrome.tabGroups.query({});
+        const m = groups.find((g) => (g.title ?? "").toLowerCase().includes(arg.toLowerCase()));
+        if (m) resolved = m.id;
+      } catch { /* ignore */ }
+      if (resolved === null) return `\x1b[31mgroup close: no tab group matching '${arg}'. See 'group list'.\x1b[0m`;
+      gid = resolved;
+    }
+  } else if (groupMode === "isolated" && sessionGroupId !== null) {
+    gid = sessionGroupId;
+  } else {
+    return "\x1b[31mgroup close: specify a group id, or attach to one first. See 'group list'.\x1b[0m";
   }
-  const gid = sessionGroupId;
+
   let tabs: chrome.tabs.Tab[] = [];
   try { tabs = await chrome.tabs.query({ groupId: gid }); } catch { /* group already gone */ }
 
@@ -3256,15 +3280,19 @@ async function groupClose(): Promise<string> {
     for (const id of toClose) createdTabIds.delete(id);
   }
   createdGroupIds.delete(gid);
-  groupMode = "shared";
-  sessionGroupId = null;
-  sessionGroupName = null;
-  sessionGroupDisrupted = false;
-  state.path = [];
-  state.axNodeIds = [];
+
+  // If we just closed the group we were attached to, drop back to dom@shell.
+  if (gid === sessionGroupId) {
+    groupMode = "shared";
+    sessionGroupId = null;
+    sessionGroupName = null;
+    sessionGroupDisrupted = false;
+    state.path = [];
+    state.axNodeIds = [];
+  }
   persistState();
   const keptMsg = kept > 0
-    ? ` \x1b[33m${kept} user-added tab${kept === 1 ? "" : "s"} left open.\x1b[0m`
+    ? ` \x1b[33m${kept} non-DOMShell tab${kept === 1 ? "" : "s"} left open (group kept).\x1b[0m`
     : "";
   return `\x1b[32m✓ Closed group ${gid} — removed ${toClose.length} DOMShell tab${toClose.length === 1 ? "" : "s"}.\x1b[0m${keptMsg}`;
 }

@@ -310,19 +310,40 @@ function wsConnect(): void {
 
         if (msg.type === "SESSION_START") {
           // An MCP session started — give it its own isolated group (ADR-001 D3).
-          if (groupMode === "shared") {
-            await groupNew(["agent"]);
-            mcpSessionActive = true;
+          // `groupMode`/`sessionGroupId` are persisted (chrome.storage), so on a
+          // fresh connect we may be restored into a stale "isolated" state whose
+          // group was closed between sessions. Create a fresh group when we are
+          // shared OR when the restored session group no longer exists.
+          let groupAlive = false;
+          if (groupMode === "isolated" && sessionGroupId !== null) {
+            try {
+              await chrome.tabGroups.get(sessionGroupId);
+              groupAlive = true;
+            } catch {
+              groupAlive = false;  // persisted group was closed between sessions
+            }
           }
+          if (!groupAlive) {
+            // Clear stale isolated state so groupNew() doesn't report a phantom
+            // "previous group" and starts cleanly.
+            groupMode = "shared";
+            sessionGroupId = null;
+            sessionGroupName = null;
+            sessionGroupDisrupted = false;
+            await groupNew(["agent"]);
+          }
+          mcpSessionActive = true;
           return;
         }
 
         if (msg.type === "SESSION_END") {
           // Non-destructive teardown (PRD-001 Req 7) — detach, leave the group open.
-          if (mcpSessionActive) {
+          // Gate on groupMode, not the non-persisted mcpSessionActive flag: a
+          // service-worker restart mid-session would otherwise strand the state.
+          if (groupMode === "isolated") {
             await groupDetach();
-            mcpSessionActive = false;
           }
+          mcpSessionActive = false;
           return;
         }
 

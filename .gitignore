@@ -45,3 +45,4 @@ experiments/*/results
 *.mov
 docs/
 .cto-path
+.cto-path.example

@@ -39,6 +39,7 @@ let createdGroupIds = new Set<number>();  // groups DOMShell created (ADR-001 D6
 let createdTabIds = new Set<number>();    // tabs DOMShell opened (non-destructive close, ADR-001 D7)
 let sessionGroupDisrupted = false;        // session group removed externally (ADR-001 D7)
 let groupSeq = 0;                         // disambiguates default group names
+let sessionGroupName: string | null = null; // attached group's display name (prompt host)
 
 /** Lazy cache for visible text (innerText), keyed by backendDOMNodeId. Cleared on tree rebuild. */
 let textContentCache: Map<number, string> = new Map();
@@ -91,6 +92,7 @@ function persistState(): void {
     domshell_group: {
       mode: groupMode,
       groupId: sessionGroupId,
+      groupName: sessionGroupName,
       createdGroupIds: [...createdGroupIds],
       createdTabIds: [...createdTabIds],
     },
@@ -450,6 +452,7 @@ chrome.storage.local.get(
       const g: any = result.domshell_group;
       groupMode = g.mode === "isolated" ? "isolated" : "shared";
       sessionGroupId = typeof g.groupId === "number" ? g.groupId : null;
+      sessionGroupName = typeof g.groupName === "string" ? g.groupName : null;
       createdGroupIds = new Set(Array.isArray(g.createdGroupIds) ? g.createdGroupIds : []);
       createdTabIds = new Set(Array.isArray(g.createdTabIds) ? g.createdTabIds : []);
     }
@@ -526,14 +529,16 @@ chrome.runtime.onConnect.addListener((port) => {
   port.onMessage.addListener(async (msg) => {
     if (msg.type === "STDIN") {
       const output = await executeCommand(msg.input);
-      port.postMessage({ type: "STDOUT", output });
+      port.postMessage({ type: "STDOUT", output, prompt: currentPrompt() });
     } else if (msg.type === "COMPLETE") {
       const matches = getCompletions(msg.partial, msg.command);
       port.postMessage({ type: "COMPLETE_RESPONSE", matches, partial: msg.partial });
     } else if (msg.type === "READY") {
+      await maybeAutoAttach();
       port.postMessage({
         type: "STDOUT",
         output: formatWelcome(),
+        prompt: currentPrompt(),
       });
     }
   });
@@ -2003,7 +2008,7 @@ async function listBrowserLevel(browserPath: string[]): Promise<string> {
 
   if (browserPath.length === 0) {
     // Browser root: show windows/ and tabs/ directories
-    const totalTabs = allWindows.reduce((sum, w) => sum + (w.tabs?.length ?? 0), 0);
+    const totalTabs = allWindows.reduce((sum, w) => sum + (w.tabs ?? []).filter(tabInScope).length, 0);
     const lines = [
       `  \x1b[1;34mwindows/\x1b[0m       \x1b[90m(${allWindows.length} windows)\x1b[0m`,
       `  \x1b[1;34mtabs/\x1b[0m          \x1b[90m(${totalTabs} tabs)\x1b[0m`,
@@ -2019,12 +2024,15 @@ async function listBrowserLevel(browserPath: string[]): Promise<string> {
   }
 
   if (browserPath[0] === "tabs") {
-    // Flat list of all tabs
-    const lines: string[] = [
-      `  \x1b[90mID     TITLE                                URL                                    WIN\x1b[0m`,
-    ];
+    // Flat list of tabs — scoped to the attached group, if any.
+    const lines: string[] = [];
+    if (groupMode === "isolated" && sessionGroupId !== null) {
+      lines.push(`\x1b[36mAttached to '${sessionGroupName ?? sessionGroupId}' — showing this group's tabs only.\x1b[0m`);
+    }
+    lines.push(`  \x1b[90mID     TITLE                                URL                                    WIN\x1b[0m`);
     for (const win of allWindows) {
       for (const tab of win.tabs ?? []) {
+        if (!tabInScope(tab)) continue;
         const current = tab.id === state.activeTabId ? " \x1b[32m*current\x1b[0m" : "";
         const active = tab.active ? "\x1b[33m*\x1b[0m" : " ";
         const id = String(tab.id ?? "?").padEnd(6);
@@ -2040,14 +2048,18 @@ async function listBrowserLevel(browserPath: string[]): Promise<string> {
   }
 
   if (browserPath[0] === "windows" && browserPath.length === 1) {
-    // Tree view of windows with their tabs
+    // Tree view of windows with their tabs \u2014 scoped to the attached group, if any.
     const lines: string[] = [];
-    for (let wi = 0; wi < allWindows.length; wi++) {
-      const win = allWindows[wi];
+    if (groupMode === "isolated" && sessionGroupId !== null) {
+      lines.push(`\x1b[36mAttached to '${sessionGroupName ?? sessionGroupId}' \u2014 showing this group's tabs only.\x1b[0m`);
+      lines.push("");
+    }
+    for (const win of allWindows) {
+      const tabs = (win.tabs ?? []).filter(tabInScope);
+      if (tabs.length === 0) continue;
       const focused = win.focused ? " \x1b[33m(focused)\x1b[0m" : "";
       lines.push(`\x1b[1;34mWindow ${win.id ?? "?"}\x1b[0m${focused}`);
 
-      const tabs = win.tabs ?? [];
       for (let ti = 0; ti < tabs.length; ti++) {
         const tab = tabs[ti];
         const isLast = ti === tabs.length - 1;
@@ -2059,10 +2071,8 @@ async function listBrowserLevel(browserPath: string[]): Promise<string> {
         const url = (tab.url ?? "").replace(/^https?:\/\//, "").slice(0, 30);
         lines.push(`${connector}${active}${id} ${title} \x1b[90m${url}\x1b[0m${current}`);
       }
-
-      if (wi < allWindows.length - 1) lines.push("");
+      lines.push("");
     }
-    lines.push("");
     lines.push(`\x1b[90mUse 'cd windows/<id>/<tab-id>' to enter a tab, or 'here' to jump to the active tab.\x1b[0m`);
     return lines.join("\r\n");
   }
@@ -2077,6 +2087,7 @@ async function listBrowserLevel(browserPath: string[]): Promise<string> {
       `  \x1b[90mID     TITLE                                URL\x1b[0m`,
     ];
     for (const tab of win.tabs ?? []) {
+      if (!tabInScope(tab)) continue;
       const current = tab.id === state.activeTabId ? " \x1b[32m*current\x1b[0m" : "";
       const id = String(tab.id ?? "?").padEnd(6);
       const title = (tab.title ?? "untitled").slice(0, 36).padEnd(36);
@@ -2098,6 +2109,7 @@ async function listBrowserLevelJson(browserPath: string[]): Promise<string> {
     const tabs: any[] = [];
     for (const win of allWindows) {
       for (const tab of win.tabs ?? []) {
+        if (!tabInScope(tab)) continue;
         tabs.push({
           id: tab.id,
           title: tab.title ?? "untitled",
@@ -2114,7 +2126,7 @@ async function listBrowserLevelJson(browserPath: string[]): Promise<string> {
   if (browserPath[0] === "windows") {
     const windows: any[] = [];
     for (const win of allWindows) {
-      const tabs = (win.tabs ?? []).map(tab => ({
+      const tabs = (win.tabs ?? []).filter(tabInScope).map(tab => ({
         id: tab.id,
         title: tab.title ?? "untitled",
         url: tab.url ?? "",
@@ -3053,6 +3065,42 @@ async function handleScript(rawArgs: string): Promise<string> {
   return `\x1b[31mscript: unknown subcommand '${sub}'. Use: list, save, show, run, delete\x1b[0m`;
 }
 
+// ---- group helpers ----
+
+/** Strip the 🐚 prefix from a group title for use as a prompt host name. */
+function cleanGroupName(title: string | undefined): string {
+  const t = (title ?? "").replace(/^\u{1F41A}\s*/u, "").trim();
+  return t || "group";
+}
+
+/** A tab is in scope when not attached, or when it belongs to the attached group. */
+function tabInScope(tab: { groupId?: number }): boolean {
+  if (groupMode !== "isolated" || sessionGroupId === null) return true;
+  return tab.groupId === sessionGroupId;
+}
+
+/** The shell prompt — the attached group becomes the host (dom@<group>). */
+function currentPrompt(): string {
+  const host = (groupMode === "isolated" && sessionGroupName) ? sessionGroupName : "shell";
+  return `\x1b[1;32mdom\x1b[0m@\x1b[1;34m${host}\x1b[0m:\x1b[1;33m$\x1b[0m `;
+}
+
+/** On launch, if the focused tab is inside a Chrome tab group, attach to it. */
+async function maybeAutoAttach(): Promise<void> {
+  if (groupMode === "isolated") return;  // already attached (e.g. restored)
+  try {
+    const win = await chrome.windows.getLastFocused({ populate: true });
+    const activeTab = win.tabs?.find((t) => t.active);
+    if (!activeTab || activeTab.groupId === undefined || activeTab.groupId < 0) return;
+    const g = await chrome.tabGroups.get(activeTab.groupId);
+    groupMode = "isolated";
+    sessionGroupId = activeTab.groupId;
+    sessionGroupName = cleanGroupName(g.title);
+    sessionGroupDisrupted = false;
+    persistState();
+  } catch { /* no auto-attach */ }
+}
+
 // ---- group (tab-group session isolation, PRD-001 / ADR-001) ----
 
 async function handleGroup(args: string[]): Promise<string> {
@@ -3114,6 +3162,7 @@ async function groupNew(rest: string[]): Promise<string> {
   createdGroupIds.add(gid);
   groupMode = "isolated";
   sessionGroupId = gid;
+  sessionGroupName = cleanGroupName(title);
   sessionGroupDisrupted = false;
   try { await cdpSwitchToTab(tab.id); } catch { /* blank tab — attach lazily later */ }
   state.path = ["tabs", String(tab.id)];
@@ -3134,39 +3183,37 @@ async function groupAttach(rest: string[]): Promise<string> {
   const target = rest.join(" ").trim();
   if (!target) return "\x1b[31mgroup attach: specify a group id or name.\x1b[0m";
 
-  let gid: number | null = null;
+  let allGroups: chrome.tabGroups.TabGroup[];
+  try {
+    allGroups = await chrome.tabGroups.query({});
+  } catch (err: any) {
+    return `\x1b[31mgroup attach: ${err.message}\x1b[0m`;
+  }
+  if (allGroups.length === 0) {
+    return "\x1b[31mgroup attach: no tab groups exist. Run 'group new' to create one.\x1b[0m";
+  }
+
   const asId = parseInt(target, 10);
-  if (!isNaN(asId) && createdGroupIds.has(asId)) {
-    gid = asId;
-  } else {
-    for (const id of createdGroupIds) {
-      try {
-        const g = await chrome.tabGroups.get(id);
-        if ((g.title ?? "").toLowerCase().includes(target.toLowerCase())) { gid = id; break; }
-      } catch { createdGroupIds.delete(id); }
-    }
+  let match = !isNaN(asId) ? allGroups.find((g) => g.id === asId) : undefined;
+  if (!match) {
+    match = allGroups.find((g) => (g.title ?? "").toLowerCase().includes(target.toLowerCase()));
+  }
+  if (!match) {
+    return `\x1b[31mgroup attach: no tab group matching '${target}'. Run 'group list'.\x1b[0m`;
   }
 
-  if (gid === null) {
-    if (!isNaN(asId)) {
-      return `\x1b[31mgroup attach: '${target}' is not a DOMShell-created group. ` +
-        `'attach' only binds to groups DOMShell created (see 'group list'). ` +
-        `To act on your own tabs, stay in shared mode.\x1b[0m`;
-    }
-    return `\x1b[31mgroup attach: no DOMShell group matching '${target}'. See 'group list'.\x1b[0m`;
-  }
-
+  const gid = match.id;
   let tabs: chrome.tabs.Tab[];
   try {
     tabs = await chrome.tabs.query({ groupId: gid });
   } catch {
-    createdGroupIds.delete(gid);
     return `\x1b[31mgroup attach: group ${gid} no longer exists.\x1b[0m`;
   }
   if (tabs.length === 0) return `\x1b[31mgroup attach: group ${gid} has no tabs.\x1b[0m`;
 
   groupMode = "isolated";
   sessionGroupId = gid;
+  sessionGroupName = cleanGroupName(match.title);
   sessionGroupDisrupted = false;
   const first = tabs[0];
   if (first.id !== undefined) {
@@ -3174,20 +3221,20 @@ async function groupAttach(rest: string[]): Promise<string> {
     state.path = ["tabs", String(first.id)];
   }
   persistState();
-  let title = String(gid);
-  try { title = (await chrome.tabGroups.get(gid)).title ?? String(gid); } catch { /* ignore */ }
-  return `\x1b[32m✓ Attached to group '${title}'  [id ${gid}]  (${tabs.length} tab${tabs.length === 1 ? "" : "s"}).\x1b[0m`;
+  return `\x1b[32m✓ Attached to '${match.title ?? gid}'  [id ${gid}]  ` +
+    `(${tabs.length} tab${tabs.length === 1 ? "" : "s"}). Prompt is now dom@${sessionGroupName}.\x1b[0m`;
 }
 
 async function groupDetach(): Promise<string> {
-  if (groupMode === "shared") return "\x1b[90mAlready in shared mode.\x1b[0m";
-  const prev = sessionGroupId;
+  if (groupMode === "shared") return "\x1b[90mNot attached — already at dom@shell.\x1b[0m";
+  const prev = sessionGroupName ?? String(sessionGroupId ?? "");
   groupMode = "shared";
   sessionGroupId = null;
+  sessionGroupName = null;
   sessionGroupDisrupted = false;
   persistState();
-  return `\x1b[32m✓ Detached from group ${prev ?? ""}. ` +
-    `Now in shared mode — the group and its tabs are left intact.\x1b[0m`;
+  return `\x1b[32m✓ Detached from '${prev}' — back to dom@shell (general browser). ` +
+    `The group and its tabs are left intact.\x1b[0m`;
 }
 
 async function groupClose(): Promise<string> {
@@ -3211,6 +3258,7 @@ async function groupClose(): Promise<string> {
   createdGroupIds.delete(gid);
   groupMode = "shared";
   sessionGroupId = null;
+  sessionGroupName = null;
   sessionGroupDisrupted = false;
   state.path = [];
   state.axNodeIds = [];
@@ -3222,22 +3270,20 @@ async function groupClose(): Promise<string> {
 }
 
 async function groupList(): Promise<string> {
-  if (createdGroupIds.size === 0) return "\x1b[90m(no DOMShell groups)\x1b[0m";
-  const lines = ["\x1b[1;36mDOMShell groups:\x1b[0m"];
-  const stale: number[] = [];
-  for (const id of createdGroupIds) {
-    try {
-      const g = await chrome.tabGroups.get(id);
-      const tabs = await chrome.tabs.query({ groupId: id });
-      const marker = id === sessionGroupId ? "  \x1b[32m(active)\x1b[0m" : "";
-      lines.push(`  \x1b[37m${g.title ?? "(untitled)"}\x1b[0m  [id ${id}]  ${tabs.length} tab${tabs.length === 1 ? "" : "s"}${marker}`);
-    } catch {
-      stale.push(id);
-    }
+  let groups: chrome.tabGroups.TabGroup[];
+  try {
+    groups = await chrome.tabGroups.query({});
+  } catch (err: any) {
+    return `\x1b[31mgroup list: ${err.message}\x1b[0m`;
   }
-  for (const id of stale) createdGroupIds.delete(id);
-  if (stale.length > 0) persistState();
-  if (lines.length === 1) return "\x1b[90m(no DOMShell groups)\x1b[0m";
+  if (groups.length === 0) return "\x1b[90m(no tab groups — run 'group new' to create one)\x1b[0m";
+  const lines = ["\x1b[1;36mTab groups (group attach <id> to enter):\x1b[0m"];
+  for (const g of groups) {
+    const tabs = await chrome.tabs.query({ groupId: g.id });
+    const marker = g.id === sessionGroupId ? "  \x1b[32m(attached)\x1b[0m" : "";
+    const own = createdGroupIds.has(g.id) ? "" : "  \x1b[90m(your group)\x1b[0m";
+    lines.push(`  \x1b[37m${g.title ?? "(untitled)"}\x1b[0m  [id ${g.id}]  ${tabs.length} tab${tabs.length === 1 ? "" : "s"}${marker}${own}`);
+  }
   return lines.join("\r\n");
 }
 
@@ -3269,6 +3315,7 @@ async function handleEach(rawArgs: string): Promise<string> {
   for (const w of windows) {
     if (w.tabs) {
       for (const t of w.tabs) {
+        if (!tabInScope(t)) continue;
         if (t.id && t.url && !t.url.startsWith("chrome://") && !t.url.startsWith("chrome-extension://")) {
           if (!pattern || (t.title && t.title.toLowerCase().includes(pattern)) || t.url.toLowerCase().includes(pattern)) {
             allTabs.push(t);

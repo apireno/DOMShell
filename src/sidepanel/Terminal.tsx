@@ -3,7 +3,7 @@ import { Terminal as XTerminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 
-const PROMPT = "\x1b[1;32mdom\x1b[0m@\x1b[1;34mshell\x1b[0m:\x1b[1;33m$\x1b[0m ";
+const DEFAULT_PROMPT = "\x1b[1;32mdom\x1b[0m@\x1b[1;34mshell\x1b[0m:\x1b[1;33m$\x1b[0m ";
 
 export default function Terminal() {
   const termRef = useRef<HTMLDivElement>(null);
@@ -13,9 +13,11 @@ export default function Terminal() {
   const historyRef = useRef<string[]>([]);
   const historyIndex = useRef(-1);
   const completionPending = useRef(false);
+  // Prompt is dynamic — the background sends it (it reflects the attached group).
+  const promptRef = useRef(DEFAULT_PROMPT);
 
   const writePrompt = useCallback(() => {
-    xtermRef.current?.write(PROMPT);
+    xtermRef.current?.write(promptRef.current);
   }, []);
 
   useEffect(() => {
@@ -65,6 +67,7 @@ export default function Terminal() {
     // Handle messages from the background
     port.onMessage.addListener((msg) => {
       if (msg.type === "STDOUT" || msg.type === "STDERR") {
+        if (typeof msg.prompt === "string") promptRef.current = msg.prompt;
         if (msg.output || msg.error) {
           term.write((msg.output ?? msg.error) + "\r\n");
         }

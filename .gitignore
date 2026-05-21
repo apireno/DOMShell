@@ -16,6 +16,7 @@ dist/
 
 # Claude Code harness config (local only — not for public repo)
 .claude/
+CLAUDE.md
 
 # Agentic workflow scripts (local only — internal multi-agent tooling)
 scripts/agentic/

@@ -1787,11 +1787,15 @@ const COMMANDS = [
   "functions", "call", "watch", "for", "script", "each",
 ];
 
-async function getCompletions(partial: string, command: string, line: string = ""): Promise<string[]> {
+/** A completion carries a `value` (inserted into the line) and a `label` (shown in the list). */
+interface Completion { value: string; label: string; }
+const cmpl = (value: string, label?: string): Completion => ({ value, label: label ?? value });
+
+async function getCompletions(partial: string, command: string, line: string = ""): Promise<Completion[]> {
   // If no command yet (completing the command name itself)
   if (!command || command === partial) {
     const lower = partial.toLowerCase();
-    return COMMANDS.filter((c) => c.startsWith(lower));
+    return COMMANDS.filter((c) => c.startsWith(lower)).map((c) => cmpl(c));
   }
 
   // group: complete subcommands, and group targets for `attach` / `close`
@@ -1800,19 +1804,22 @@ async function getCompletions(partial: string, command: string, line: string = "
     const sub = (parts[1] ?? "").toLowerCase();
     // "group <partial>" — complete the subcommand
     if (parts.length <= 2 && (parts[1] ?? "") === partial) {
-      return ["new", "attach", "detach", "close", "list"].filter((s) => s.startsWith(partial.toLowerCase()));
+      return ["new", "attach", "detach", "close", "list"]
+        .filter((s) => s.startsWith(partial.toLowerCase()))
+        .map((s) => cmpl(s));
     }
-    // "group attach <partial>" / "group close <partial>" — complete a group id or name
+    // "group attach <partial>" / "group close <partial>" — complete a group
     if (sub === "attach" || sub === "close") {
       try {
         const groups = await chrome.tabGroups.query({});
         const lower = partial.toLowerCase();
-        const out: string[] = [];
+        const out: Completion[] = [];
         for (const g of groups) {
           const idStr = String(g.id);
-          if (idStr.startsWith(partial)) out.push(idStr);
           const name = cleanGroupName(g.title);
-          if (name.toLowerCase().startsWith(lower) && !out.includes(name)) out.push(name);
+          if (idStr.startsWith(partial) || name.toLowerCase().startsWith(lower)) {
+            out.push(cmpl(idStr, `${idStr}  ${g.title ?? "(untitled)"}`));
+          }
         }
         return out;
       } catch {
@@ -1824,7 +1831,7 @@ async function getCompletions(partial: string, command: string, line: string = "
 
   // Path variable completion for cd
   if (command === "cd" && partial.startsWith("%")) {
-    return ["%here%"].filter((v) => v.startsWith(partial));
+    return ["%here%"].filter((v) => v.startsWith(partial)).map((v) => cmpl(v));
   }
 
   // For cd at browser level
@@ -1832,21 +1839,23 @@ async function getCompletions(partial: string, command: string, line: string = "
     const lower = partial.toLowerCase();
     if (state.path.length === 0) {
       // At ~: complete "tabs" or "windows"
-      return ["tabs/", "windows/"].filter((c) => c.toLowerCase().startsWith(lower));
+      return ["tabs/", "windows/"].filter((c) => c.toLowerCase().startsWith(lower)).map((c) => cmpl(c));
     }
-    // At ~/tabs: complete tab IDs, scoped to the attached group.
+    // At ~/tabs: complete tab IDs (label shows the title), scoped to the attached group.
     if (state.path[0] === "tabs") {
       try {
         const wins = await chrome.windows.getAll({ populate: true });
-        const ids: string[] = [];
+        const out: Completion[] = [];
         for (const w of wins) {
           for (const t of w.tabs ?? []) {
             if (!tabInScope(t)) continue;
             const idStr = String(t.id ?? "");
-            if (idStr && idStr.startsWith(partial)) ids.push(idStr);
+            if (idStr && idStr.startsWith(partial)) {
+              out.push(cmpl(idStr, `${idStr}  ${(t.title ?? "untitled").slice(0, 50)}`));
+            }
           }
         }
-        return ids;
+        return out;
       } catch {
         return [];
       }
@@ -1871,7 +1880,7 @@ async function getCompletions(partial: string, command: string, line: string = "
       matches = matches.filter((c) => c.isDirectory);
     }
 
-    return matches.map((m) => m.name + (m.isDirectory ? "/" : ""));
+    return matches.map((m) => cmpl(m.name + (m.isDirectory ? "/" : "")));
   } catch {
     return [];
   }

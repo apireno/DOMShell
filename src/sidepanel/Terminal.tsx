@@ -182,7 +182,7 @@ export default function Terminal() {
 
   function handleCompletionResponse(
     term: XTerminal,
-    matches: string[],
+    matches: { value: string; label: string }[],
     partial: string
   ) {
     completionPending.current = false;
@@ -194,25 +194,20 @@ export default function Terminal() {
     const isCommandCompletion = parts.length <= 1;
 
     if (matches.length === 1) {
-      // Single match — auto-complete
-      const completion = matches[0];
-      const suffix = completion.slice(partial.length);
-
-      if (isCommandCompletion) {
-        // Replace the whole partial with the match + trailing space
-        lineBuffer.current = completion + " ";
-        term.write(suffix + " ");
-      } else {
-        // Replace just the last word
-        lineBuffer.current = parts.slice(0, -1).join(" ") + " " + completion;
-        term.write(suffix);
-      }
+      // Single match — replace the partial with the full value (the value may
+      // differ from what was typed, e.g. an id matched by its title).
+      const value = matches[0].value;
+      const newLine = isCommandCompletion
+        ? value + " "
+        : parts.slice(0, -1).join(" ") + " " + value;
+      replaceLineWith(term, newLine);
     } else {
       // Multiple matches — extend to the common prefix, EXCEPT when every match
       // is numeric (e.g. tab IDs): their shared prefix is meaningless noise, so
       // just list the options and let the user pick.
-      const allNumeric = matches.every((m) => /^\d+$/.test(m));
-      const commonPrefix = allNumeric ? partial : findCommonPrefix(matches);
+      const values = matches.map((m) => m.value);
+      const allNumeric = values.every((v) => /^\d+$/.test(v));
+      const commonPrefix = allNumeric ? partial : findCommonPrefix(values);
       const extraChars = commonPrefix.slice(partial.length);
 
       if (extraChars.length > 0) {
@@ -227,7 +222,7 @@ export default function Terminal() {
 
       // Show all options below
       term.write("\r\n");
-      const display = matches.map((m) => `  ${m}`).join("\r\n");
+      const display = matches.map((m) => `  ${m.label}`).join("\r\n");
       term.write(display + "\r\n");
       writePrompt();
       term.write(lineBuffer.current);

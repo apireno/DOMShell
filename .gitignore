@@ -17,6 +17,9 @@ dist/
 # Claude Code harness config (local only — not for public repo)
 .claude/
 
+# Agentic workflow scripts (local only — internal multi-agent tooling)
+scripts/agentic/
+
 # OS files
 .DS_Store
 Thumbs.db

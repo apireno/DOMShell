@@ -277,6 +277,22 @@ async function executeWithSecurity(command: string): Promise<string> {
 
 const MCP_INSTRUCTIONS = `DOMShell gives you full browser control through a filesystem metaphor. The DOM's Accessibility Tree (AXTree) is mapped to directories (containers like navigation/, main/, form/) and files (interactive elements like submit_btn, search_input, login_link). The browser itself (windows, tabs) is also part of the hierarchy.
 
+INTERFACE — ONE TOOL
+You drive DOMShell through a single tool: domshell_execute. Pass a command string ("ls", "cd tabs/123", "text main"). To run a whole workflow in ONE call, pass MULTIPLE commands separated by newlines — each line runs in order and the combined output is returned:
+  domshell_execute("open https://example.com\\ncd main\\ntext")
+Most commands accept relative paths, so you rarely need a separate cd: "text main/article", "click form/submit_btn".
+NAMING NOTE: this guide sometimes writes a command as "domshell_<name>" (e.g. domshell_text) — that simply means the "<name>" command (e.g. "text"). Run any command via domshell_execute, e.g. domshell_execute("text main"). (If the server was started with --granular, each command is ALSO exposed as its own domshell_<name> tool — but domshell_execute is the primary, recommended interface.)
+
+COMMAND REFERENCE
+Browser & tabs: tabs · windows · here · cd <path> · open <url> · navigate <url> · back · forward · close [id] · group [new|attach|detach|close|list]
+Reading: ls [--meta --text --json] · cat <name> · text [name] [--links] · tree [depth] · read [name] · grep [-r] <pattern> · find [--type ROLE --meta --text] <pattern> · extract_links · extract_table <name> · screenshot · diff
+Interacting (write tier, needs --allow-write): click <name> · focus <name> · type <text> · select <name> <value> · scroll down|up|<name> · submit <input> <value> · wait <pattern>
+JavaScript: eval <expr> (read-only, always available) · js <code> (write tier) · functions [pattern] · call <fn> <args>
+Workflow: watch <cmd> [--until-change] · for "<cmd>" : <template> · script save|run|list|show|delete · each [--pattern F] <cmd> · bookmark <name> · env · export · history · pwd · refresh
+
+TAB GROUPS (isolation)
+DOMShell can run inside an isolated Chrome tab group — its own lane, separate from the user's other tabs. Run "group" to see the current mode. "group new [name]" creates an isolated group; "group attach <id>", "group detach", "group close", "group list" manage them. While in an isolated group, tabs / windows / cd are ALL confined to that group — you only see and act on the group's tabs. Run "group" anytime to check whether you are scoped.
+
 WHEN TO USE DOMSHELL (prefer over native browser tools):
 - Navigating to websites: use domshell_navigate or domshell_open
 - Going back/forward: domshell_back / domshell_forward (faster than re-navigating, uses browser cache)

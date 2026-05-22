@@ -14,7 +14,7 @@ import { INTERACTIVE_ROLES, ROLE_ALIASES } from "../shared/types.ts";
 
 const cdp = new CDPClient();
 
-const state: ShellState = {
+let state: ShellState = {
   path: [],                // Start at browser root (~)
   axNodeIds: [],           // No DOM context yet
   activeTabId: null,       // No tab attached yet
@@ -27,6 +27,7 @@ const state: ShellState = {
 
 let nodeMap: Map<string, AXNode> = new Map();
 let treeStale = false;
+let nodeMapTabId: number | null = null;  // tab whose AX tree nodeMap holds (Sprint 03 — session tree coherence)
 let commandHistory: string[] = [];
 let bookmarks: Record<string, string[]> = {};
 let scripts: Record<string, string[]> = {};
@@ -41,6 +42,119 @@ let sessionGroupDisrupted = false;        // session group removed externally (A
 let groupSeq = 0;                         // disambiguates default group names
 let sessionGroupName: string | null = null; // attached group's display name (prompt host)
 let mcpSessionActive = false;             // an MCP session created the current group (ADR-001 D3)
+
+// ---- Per-session state (Sprint 03 — Multi-Session, ADR-003 D1/D2) ----
+// Each side-panel window and the MCP bridge is a Session with its own cursor,
+// group binding, and history. The kernel keeps one set of module-level working
+// variables (`state`, `groupMode`, …); swapToSession() loads a session's values
+// in before a command and saves them back after. Safe because commands are
+// serialized (runSerialized) — exactly one is ever in flight.
+
+interface Session {
+  id: string;
+  state: ShellState;
+  groupMode: GroupMode;
+  sessionGroupId: number | null;
+  sessionGroupName: string | null;
+  sessionGroupDisrupted: boolean;
+  commandHistory: string[];
+}
+
+const sessions = new Map<string, Session>();
+let currentSessionId = "";
+
+/** Save the module working vars back into the named session. */
+function saveSession(id: string): void {
+  const s = sessions.get(id);
+  if (!s) return;
+  s.state = state;
+  s.groupMode = groupMode;
+  s.sessionGroupId = sessionGroupId;
+  s.sessionGroupName = sessionGroupName;
+  s.sessionGroupDisrupted = sessionGroupDisrupted;
+  s.commandHistory = commandHistory;
+}
+
+/** Swap the named session into the module working vars. MUST run inside
+ *  runSerialized() — never concurrently. Re-establishes DOM context if the AX
+ *  tree currently loaded belongs to a different session's tab. */
+async function swapToSession(id: string): Promise<void> {
+  if (id === currentSessionId && sessions.has(id)) return;
+
+  // First swap ever: adopt the module state restoreState() populated at startup
+  // as this session, so the first console persists exactly as it did before.
+  if (sessions.size === 0) {
+    sessions.set(id, {
+      id, state, groupMode, sessionGroupId, sessionGroupName,
+      sessionGroupDisrupted, commandHistory,
+    });
+    currentSessionId = id;
+    return;
+  }
+
+  saveSession(currentSessionId);
+
+  let s = sessions.get(id);
+  if (!s) {
+    s = {
+      id,
+      state: {
+        path: [], axNodeIds: [], activeTabId: null,
+        env: { SHELL: "/bin/domshell", TERM: "xterm-256color", PS1: "dom@shell:$PWD$ " },
+      },
+      groupMode: "shared",
+      sessionGroupId: null,
+      sessionGroupName: null,
+      sessionGroupDisrupted: false,
+      commandHistory: [],
+    };
+    sessions.set(id, s);
+  }
+
+  state = s.state;
+  groupMode = s.groupMode;
+  sessionGroupId = s.sessionGroupId;
+  sessionGroupName = s.sessionGroupName;
+  sessionGroupDisrupted = s.sessionGroupDisrupted;
+  commandHistory = s.commandHistory;
+  currentSessionId = id;
+
+  await resumeDomContext();
+}
+
+/** Re-derive the current session's DOM context: if the loaded AX tree is for a
+ *  different tab, rebuild it for this session's tab and re-resolve the path
+ *  (ADR-003 D6 — durable path restored, volatile snapshot re-derived). */
+async function resumeDomContext(): Promise<void> {
+  const tabId = getTabIdFromPath(state.path);
+  if (tabId === null) return;                              // browser-level — no DOM context
+  if (nodeMapTabId === tabId && nodeMap.size > 0) return;  // tree already correct
+  try {
+    await cdpSwitchToTab(tabId);                           // rebuild tree; axNodeIds = [root]
+  } catch {
+    state.path = [];                                       // tab is gone — fall back to browser root
+    state.axNodeIds = [];
+    return;
+  }
+  const domStart = getDomStartIndex(state.path);
+  if (domStart < 0) return;
+  const root = findRootNode(nodeMap);
+  if (!root) return;
+  const ids = [root.nodeId];
+  let parentId = root.nodeId;
+  let resolved = 0;
+  for (const seg of state.path.slice(domStart)) {
+    const child = findChildByName(parentId, seg, nodeMap);
+    if (!child) break;                                     // page changed — stop where it last resolved
+    ids.push(child.axNodeId);
+    parentId = child.axNodeId;
+    resolved++;
+  }
+  state.axNodeIds = ids;
+  if (resolved < state.path.length - domStart) {
+    state.path = state.path.slice(0, domStart + resolved);
+  }
+}
 
 /** Lazy cache for visible text (innerText), keyed by backendDOMNodeId. Cleared on tree rebuild. */
 let textContentCache: Map<number, string> = new Map();
@@ -180,9 +294,10 @@ function getDomSegments(): string[] {
 
 /** Internal: attach CDP to a tab and build its AX tree. */
 async function cdpSwitchToTab(tabId: number): Promise<{ tab: chrome.tabs.Tab; nodeCount: number; iframeCount: number }> {
-  if (state.activeTabId === tabId && nodeMap.size > 0) {
+  if (nodeMapTabId === tabId && nodeMap.size > 0) {
     // Already attached — just return info.
     const tab = await chrome.tabs.get(tabId);
+    state.activeTabId = tabId;
     // Re-entering a tab via `cd` after `cd ..` clears axNodeIds; restore the DOM
     // root so the next command has a context (fixes spurious "No DOM context").
     if (state.axNodeIds.length === 0) {
@@ -203,6 +318,7 @@ async function cdpSwitchToTab(tabId: number): Promise<{ tab: chrome.tabs.Tab; no
 
   const axNodes = await cdp.getAllFrameAXTrees();
   nodeMap = buildNodeMap(axNodes);
+  nodeMapTabId = tabId;
   textContentCache = new Map();
 
   const root = findRootNode(nodeMap);
@@ -321,13 +437,18 @@ function wsConnect(): void {
           // closed group, or a still-live leftover group from a prior session.
           // Reusing either would inherit stale tabs and the wrong group name.
           console.log("[DOMShell] SESSION_START received — creating fresh 'agent' group");
-          groupMode = "shared";
-          sessionGroupId = null;
-          sessionGroupName = null;
-          sessionGroupDisrupted = false;
-          const startResult = await groupNew(["agent"]);
-          console.log("[DOMShell] SESSION_START → groupNew:", startResult.replace(/\x1b\[[0-9;]*m/g, ""));
-          mcpSessionActive = true;
+          // The MCP bridge is its own session, separate from every side panel
+          // (Sprint 03 — Multi-Session). Its group binding lives in that session.
+          await runSerialized(async () => {
+            await swapToSession("mcp");
+            groupMode = "shared";
+            sessionGroupId = null;
+            sessionGroupName = null;
+            sessionGroupDisrupted = false;
+            const startResult = await groupNew(["agent"]);
+            console.log("[DOMShell] SESSION_START → groupNew:", startResult.replace(/\x1b\[[0-9;]*m/g, ""));
+            mcpSessionActive = true;
+          });
           return;
         }
 
@@ -335,45 +456,37 @@ function wsConnect(): void {
           // Non-destructive teardown (PRD-001 Req 7) — detach, leave the group open.
           // Gate on groupMode, not the non-persisted mcpSessionActive flag: a
           // service-worker restart mid-session would otherwise strand the state.
-          if (groupMode === "isolated") {
-            await groupDetach();
-          }
-          mcpSessionActive = false;
+          await runSerialized(async () => {
+            await swapToSession("mcp");
+            if (groupMode === "isolated") {
+              await groupDetach();
+            }
+            mcpSessionActive = false;
+          });
           return;
         }
 
         if (msg.type === "EXECUTE" && msg.command) {
-          // Domain allowlist check
-          if (msg.allowedDomains && msg.allowedDomains.length > 0 && state.activeTabId) {
-            try {
-              const url = await cdp.getPageUrl();
-              const hostname = new URL(url).hostname.toLowerCase();
-              const allowed = msg.allowedDomains.some((d: string) =>
-                hostname === d || hostname.endsWith("." + d)
-              );
-              if (!allowed) {
-                ws?.send(JSON.stringify({
-                  type: "RESULT",
-                  id: msg.id,
-                  result: `Error: Domain '${hostname}' is not in the allowed list: ${msg.allowedDomains.join(", ")}`,
-                }));
-                return;
+          const result = await runSerialized(async (): Promise<string> => {
+            await swapToSession("mcp");
+            // Domain allowlist check
+            if (msg.allowedDomains && msg.allowedDomains.length > 0 && state.activeTabId) {
+              try {
+                const url = await cdp.getPageUrl();
+                const hostname = new URL(url).hostname.toLowerCase();
+                const allowed = msg.allowedDomains.some((d: string) =>
+                  hostname === d || hostname.endsWith("." + d)
+                );
+                if (!allowed) {
+                  return `Error: Domain '${hostname}' is not in the allowed list: ${msg.allowedDomains.join(", ")}`;
+                }
+              } catch {
+                // If we can't check the domain, proceed anyway
               }
-            } catch {
-              // If we can't check the domain, proceed anyway
             }
-          }
-
-          // Execute the command and send the result back. Serialized against
-          // side-panel commands so the two clients never corrupt the cursor.
-          const output = await runSerialized(() => executeCommand(msg.command));
-          const cleanOutput = stripAnsi(output);
-
-          ws?.send(JSON.stringify({
-            type: "RESULT",
-            id: msg.id,
-            result: cleanOutput,
-          }));
+            return stripAnsi(await executeCommand(msg.command));
+          });
+          ws?.send(JSON.stringify({ type: "RESULT", id: msg.id, result }));
         }
       } catch {
         // Ignore malformed messages
@@ -585,19 +698,29 @@ chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "domshell") return;
 
   port.onMessage.addListener(async (msg) => {
+    // Each side-panel window is its own session (Sprint 03 — Multi-Session).
+    // The session swap runs inside runSerialized() so it cannot race a command.
+    const sid = typeof msg.windowId === "number" ? `win:${msg.windowId}` : "panel";
     if (msg.type === "STDIN") {
-      const output = await runSerialized(() => executeCommand(msg.input));
-      port.postMessage({ type: "STDOUT", output, prompt: currentPrompt() });
+      const { output, prompt } = await runSerialized(async () => {
+        await swapToSession(sid);
+        const output = await executeCommand(msg.input);
+        return { output, prompt: currentPrompt() };
+      });
+      port.postMessage({ type: "STDOUT", output, prompt });
     } else if (msg.type === "COMPLETE") {
-      const matches = await getCompletions(msg.partial, msg.command, msg.line);
+      const matches = await runSerialized(async () => {
+        await swapToSession(sid);
+        return getCompletions(msg.partial, msg.command, msg.line);
+      });
       port.postMessage({ type: "COMPLETE_RESPONSE", matches, partial: msg.partial });
     } else if (msg.type === "READY") {
-      await maybeAutoAttach();
-      port.postMessage({
-        type: "STDOUT",
-        output: formatWelcome(),
-        prompt: currentPrompt(),
+      const { output, prompt } = await runSerialized(async () => {
+        await swapToSession(sid);
+        await maybeAutoAttach();
+        return { output: formatWelcome(), prompt: currentPrompt() };
       });
+      port.postMessage({ type: "STDOUT", output, prompt });
     }
   });
 });
@@ -3663,6 +3786,7 @@ async function handleClose(args: string[]): Promise<string> {
     state.path = [];
     state.axNodeIds = [];
     nodeMap = new Map();
+    nodeMapTabId = null;
   }
 
   const tab = await chrome.tabs.get(tabId).catch(() => null);

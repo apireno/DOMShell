@@ -462,6 +462,9 @@ function wsConnect(): void {
     const handleBridgeMessage = async (event: MessageEvent): Promise<void> => {
       try {
         const msg = JSON.parse(typeof event.data === "string" ? event.data : "");
+        // Each MCP connection is its own session — route to its own lane,
+        // separate from every other agent and every side panel (PRD-002 Phase 2).
+        const mcpSid = msg.sessionId ? `mcp:${msg.sessionId}` : "mcp";
 
         if (msg.type === "SESSION_START") {
           // An MCP session started — give it a fresh isolated group (ADR-001 D3).
@@ -474,7 +477,7 @@ function wsConnect(): void {
           // The MCP bridge is its own session, separate from every side panel
           // (Sprint 03 — Multi-Session). Its group binding lives in that session.
           await runSerialized(async () => {
-            await swapToSession("mcp");
+            await swapToSession(mcpSid);
             groupMode = "shared";
             sessionGroupId = null;
             sessionGroupName = null;
@@ -491,7 +494,7 @@ function wsConnect(): void {
           // Gate on groupMode, not the non-persisted mcpSessionActive flag: a
           // service-worker restart mid-session would otherwise strand the state.
           await runSerialized(async () => {
-            await swapToSession("mcp");
+            await swapToSession(mcpSid);
             if (groupMode === "isolated") {
               await groupDetach();
             }
@@ -502,7 +505,7 @@ function wsConnect(): void {
 
         if (msg.type === "EXECUTE" && msg.command) {
           const result = await runSerialized(async (): Promise<string> => {
-            await swapToSession("mcp");
+            await swapToSession(mcpSid);
             // Domain allowlist check
             if (msg.allowedDomains && msg.allowedDomains.length > 0 && state.activeTabId) {
               try {

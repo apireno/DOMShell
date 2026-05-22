@@ -177,6 +177,67 @@ async function resumeDomContext(): Promise<void> {
   }
 }
 
+// ---- Agent-declared lanes (PRD-003 / ADR-004) ----
+
+let agentLaneSeq = 0;  // disambiguates the temp key while a new agent lane is created
+
+/** The current session's lane id for the RESULT payload — the bound group id,
+ *  or null in shared mode (ADR-004 D5). */
+function currentLaneId(): string | null {
+  return groupMode === "isolated" && sessionGroupId !== null ? String(sessionGroupId) : null;
+}
+
+/** Create a fresh agent-declared lane: a new session + tab group, keyed
+ *  `agent:<groupId>` and made current (group_id "new" — ADR-004 D4). */
+async function createAgentLane(): Promise<void> {
+  const tempKey = `agent:pending:${++agentLaneSeq}`;
+  await swapToSession(tempKey);
+  groupMode = "shared";
+  sessionGroupId = null;
+  sessionGroupName = null;
+  sessionGroupDisrupted = false;
+  await groupNew(["agent"]);
+  if (sessionGroupId !== null) {
+    // Re-key the session by its real group id — that id is the agent's handle.
+    const realKey = `agent:${sessionGroupId}`;
+    const s = sessions.get(tempKey);
+    if (s) {
+      sessions.delete(tempKey);
+      s.id = realKey;
+      sessions.set(realKey, s);
+      currentSessionId = realKey;
+    }
+  }
+}
+
+/** Join an existing agent-declared lane by its group id (handoff — ADR-004 D7).
+ *  Returns false if no tab group with that id exists (unknown lane — D6). */
+async function swapToAgentLane(groupIdStr: string): Promise<boolean> {
+  const gid = parseInt(groupIdStr, 10);
+  if (Number.isNaN(gid)) return false;
+  try {
+    await chrome.tabGroups.get(gid);
+  } catch {
+    return false;  // no such group
+  }
+  const key = `agent:${gid}`;
+  const existed = sessions.has(key);
+  await swapToSession(key);
+  if (!existed) {
+    // Fresh session for an already-existing group — bind it to that group.
+    groupMode = "isolated";
+    sessionGroupId = gid;
+    sessionGroupDisrupted = false;
+    try {
+      const g = await chrome.tabGroups.get(gid);
+      sessionGroupName = cleanGroupName(g.title);
+    } catch {
+      sessionGroupName = "agent";
+    }
+  }
+  return true;
+}
+
 /** Lazy cache for visible text (innerText), keyed by backendDOMNodeId. Cleared on tree rebuild. */
 let textContentCache: Map<number, string> = new Map();
 
@@ -504,26 +565,45 @@ function wsConnect(): void {
         }
 
         if (msg.type === "EXECUTE" && msg.command) {
-          const result = await runSerialized(async (): Promise<string> => {
-            await swapToSession(mcpSid);
-            // Domain allowlist check
-            if (msg.allowedDomains && msg.allowedDomains.length > 0 && state.activeTabId) {
-              try {
-                const url = await cdp.getPageUrl();
-                const hostname = new URL(url).hostname.toLowerCase();
-                const allowed = msg.allowedDomains.some((d: string) =>
-                  hostname === d || hostname.endsWith("." + d)
-                );
-                if (!allowed) {
-                  return `Error: Domain '${hostname}' is not in the allowed list: ${msg.allowedDomains.join(", ")}`;
+          const { result, laneId } = await runSerialized(
+            async (): Promise<{ result: string; laneId: string | null }> => {
+              // Resolve the target lane (PRD-003 — agent-declared sessions).
+              if (msg.groupId === "new") {
+                await createAgentLane();
+              } else if (typeof msg.groupId === "string" && msg.groupId) {
+                const ok = await swapToAgentLane(msg.groupId);
+                if (!ok) {
+                  return {
+                    result: `Error: no lane '${msg.groupId}' — pass "new" for a fresh lane, or run 'group list' to see active ones.`,
+                    laneId: null,
+                  };
                 }
-              } catch {
-                // If we can't check the domain, proceed anyway
+              } else {
+                await swapToSession(mcpSid);
               }
-            }
-            return stripAnsi(await executeCommand(msg.command));
-          });
-          ws?.send(JSON.stringify({ type: "RESULT", id: msg.id, result }));
+              // Domain allowlist check
+              if (msg.allowedDomains && msg.allowedDomains.length > 0 && state.activeTabId) {
+                try {
+                  const url = await cdp.getPageUrl();
+                  const hostname = new URL(url).hostname.toLowerCase();
+                  const allowed = msg.allowedDomains.some((d: string) =>
+                    hostname === d || hostname.endsWith("." + d)
+                  );
+                  if (!allowed) {
+                    return {
+                      result: `Error: Domain '${hostname}' is not in the allowed list: ${msg.allowedDomains.join(", ")}`,
+                      laneId: currentLaneId(),
+                    };
+                  }
+                } catch {
+                  // If we can't check the domain, proceed anyway
+                }
+              }
+              const out = stripAnsi(await executeCommand(msg.command));
+              return { result: out, laneId: currentLaneId() };
+            },
+          );
+          ws?.send(JSON.stringify({ type: "RESULT", id: msg.id, result, groupId: laneId }));
         }
       } catch {
         // Ignore malformed messages

@@ -138,7 +138,11 @@ let extensionGrouping = false;                 // connected extension supports t
 const pendingSessionStarts = new Set<string>();
 const pendingRequests = new Map<
   string,
-  { resolve: (result: string) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }
+  {
+    resolve: (r: { result: string; laneId: string | null }) => void;
+    reject: (err: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }
 >();
 
 const wss = new WebSocketServer({ port: PORT, host: "127.0.0.1" });
@@ -189,7 +193,7 @@ wss.on("connection", (ws, req) => {
         if (pending) {
           clearTimeout(pending.timer);
           pendingRequests.delete(msg.id);
-          pending.resolve(msg.result ?? "");
+          pending.resolve({ result: msg.result ?? "", laneId: msg.groupId ?? null });
         }
       } else if (msg.type === "HELLO") {
         // Capability handshake (ADR-001 D11).
@@ -242,7 +246,11 @@ function sendToExtension(obj: Record<string, unknown>): boolean {
   return false;
 }
 
-function sendCommand(command: string, sessionId: string): Promise<string> {
+function sendCommand(
+  command: string,
+  sessionId: string,
+  groupId?: string,
+): Promise<{ result: string; laneId: string | null }> {
   return new Promise((resolve, reject) => {
     if (!extensionClient || extensionClient.readyState !== 1) {
       reject(new Error("Extension not connected. Open the DOMShell side panel and run: connect <token>"));
@@ -262,6 +270,7 @@ function sendCommand(command: string, sessionId: string): Promise<string> {
         type: "EXECUTE",
         id,
         sessionId,
+        groupId,
         command,
         allowedDomains: ALLOWED_DOMAINS.length > 0 ? ALLOWED_DOMAINS : undefined,
       })
@@ -269,12 +278,16 @@ function sendCommand(command: string, sessionId: string): Promise<string> {
   });
 }
 
-async function execWithSecurity(command: string, sessionId: string): Promise<string> {
+async function execWithSecurity(
+  command: string,
+  sessionId: string,
+  groupId?: string,
+): Promise<{ result: string; laneId: string | null }> {
   // Check tier
   const check = isCommandAllowed(command);
   if (!check.allowed) {
     audit(`DENIED: ${command} — ${check.reason}`);
-    return `Error: ${check.reason}`;
+    return { result: `Error: ${check.reason}`, laneId: null };
   }
 
   const tier = getCommandTier(command);
@@ -284,7 +297,7 @@ async function execWithSecurity(command: string, sessionId: string): Promise<str
     const approved = await confirmAction(command);
     if (!approved) {
       audit(`[WRITE] DENIED by user: ${command}`);
-      return "Action denied by user.";
+      return { result: "Action denied by user.", laneId: null };
     }
   }
 
@@ -293,14 +306,14 @@ async function execWithSecurity(command: string, sessionId: string): Promise<str
   audit(`${tag}EXECUTE: ${command}`);
 
   try {
-    let result = await sendCommand(command, sessionId);
-    result = redactSensitiveOutput(command, result);
+    const r = await sendCommand(command, sessionId, groupId);
+    const result = redactSensitiveOutput(command, r.result);
     const summary = result.length > 80 ? result.slice(0, 80) + "..." : result;
     audit(`${tag}RESULT: ${summary}`);
-    return result;
+    return { result, laneId: r.laneId };
   } catch (err: any) {
     audit(`${tag}ERROR: ${err.message}`);
-    return `Error: ${err.message}`;
+    return { result: `Error: ${err.message}`, laneId: null };
   }
 }
 
@@ -493,7 +506,8 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
   // MCP session id — the extension routes it to that session's own lane
   // (PRD-002 Phase 2). sidRef.sid is filled by onsessioninitialized before any
   // tool can be invoked. (Shadows the module-level execWithSecurity by design.)
-  const executeWithSecurity = (command: string) => execWithSecurity(command, sidRef.sid);
+  const executeWithSecurity = (command: string) =>
+    execWithSecurity(command, sidRef.sid).then((r) => r.result);
 
   // -- Read tier tools (always available) --
 
@@ -984,20 +998,32 @@ NOTES
 - Run "help" for the full command list, or "<command> --help" for one command's usage.
 - The session may run in an isolated tab group — run "group" to check; commands are then confined to that group.
 - The session's "agent" tab group is left open after you disconnect. When you finish a task, it is courteous to ask the user whether to close it — run "group close" only if they say yes.
+- Lanes: omit group_id for your current lane; pass "new" for a fresh isolated lane; or pass a lane id to join an existing one (handoff). Every reply ends with a "[lane: <id>]" line — carry that id back.
 - Write and sensitive commands obey the server's security tiers.`,
-    { command: z.string().describe("A DOMShell command, or multiple commands separated by newlines (e.g. 'ls -l' or 'open example.com\\ncd main\\ntext')") },
-    async ({ command }) => {
+    {
+      command: z.string().describe("A DOMShell command, or multiple commands separated by newlines (e.g. 'ls -l' or 'open example.com\\ncd main\\ntext')"),
+      group_id: z.string().optional().describe("Which session lane to run in. Omit to stay in your current lane; pass \"new\" to create a fresh isolated lane; or pass a lane id to join an existing one (e.g. to continue a session another agent started). Every response ends with a '[lane: <id>]' line — pass that id back as group_id to stay in the same lane."),
+    },
+    async ({ command, group_id }) => {
       // Multi-command: each non-blank line runs in sequence (ADR-002 D3).
       const lines = command.split("\n").map((l) => l.trim()).filter(Boolean);
-      if (lines.length <= 1) {
-        return { content: [{ type: "text", text: await executeWithSecurity(command.trim()) }] };
-      }
+      let lane = group_id;
+      let laneId: string | null = null;
       const out: string[] = [];
       for (const line of lines) {
-        out.push(`$ ${line}`);
-        out.push(await executeWithSecurity(line));
+        if (lines.length > 1) out.push(`$ ${line}`);
+        const r = await execWithSecurity(line, sidRef.sid, lane);
+        out.push(r.result);
+        laneId = r.laneId;
+        // After the first command "new" has materialized — reuse the real id so
+        // the remaining commands run in the same lane, not a new one each time.
+        if (lane === "new" && r.laneId) lane = r.laneId;
       }
-      return { content: [{ type: "text", text: out.join("\n") }] };
+      out.push(`\n[lane: ${laneId ?? "shared"}]`);
+      return {
+        content: [{ type: "text", text: out.join("\n") }],
+        structuredContent: { group_id: laneId },
+      };
     }
   );
 

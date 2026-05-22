@@ -131,8 +131,11 @@ function redactSensitiveOutput(command: string, output: string): string {
 
 let extensionClient: WebSocket | null = null;
 let extensionGrouping = false;                 // connected extension supports tab grouping? (HELLO, ADR-001 D11)
-let activeMcpSessionId: string | null = null;  // single-session enforcement (ADR-001 D5)
-let sessionStartSent = false;                  // SESSION_START delivered for the active session? (once per session, never per reconnect)
+// Multi-session (PRD-002 Phase 2): no single-session limit — concurrent MCP
+// clients each get their own session. This tracks SESSION_START messages not
+// yet delivered (the extension was offline when the session initialized);
+// they are delivered on the next HELLO, once.
+const pendingSessionStarts = new Set<string>();
 const pendingRequests = new Map<
   string,
   { resolve: (result: string) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }
@@ -196,9 +199,13 @@ wss.on("connection", (ws, req) => {
         // SESSION_START has not reached the extension yet (it connected after
         // the session began, or an earlier send dropped), send it now. NOT on
         // every reconnect — doing that spawned a duplicate agent group each time.
-        if (activeMcpSessionId && extensionGrouping && !sessionStartSent) {
-          log(`→ delivering deferred SESSION_START to extension (session ${activeMcpSessionId})`);
-          sessionStartSent = sendToExtension({ type: "SESSION_START", sessionId: activeMcpSessionId, mode: "isolated" });
+        if (extensionGrouping && pendingSessionStarts.size > 0) {
+          for (const sid of [...pendingSessionStarts]) {
+            log(`→ delivering deferred SESSION_START to extension (session ${sid})`);
+            if (sendToExtension({ type: "SESSION_START", sessionId: sid, mode: "isolated" })) {
+              pendingSessionStarts.delete(sid);
+            }
+          }
         }
       } else if (msg.type === "pong") {
         // Heartbeat response — ignore
@@ -235,7 +242,7 @@ function sendToExtension(obj: Record<string, unknown>): boolean {
   return false;
 }
 
-function sendCommand(command: string): Promise<string> {
+function sendCommand(command: string, sessionId: string): Promise<string> {
   return new Promise((resolve, reject) => {
     if (!extensionClient || extensionClient.readyState !== 1) {
       reject(new Error("Extension not connected. Open the DOMShell side panel and run: connect <token>"));
@@ -254,6 +261,7 @@ function sendCommand(command: string): Promise<string> {
       JSON.stringify({
         type: "EXECUTE",
         id,
+        sessionId,
         command,
         allowedDomains: ALLOWED_DOMAINS.length > 0 ? ALLOWED_DOMAINS : undefined,
       })
@@ -261,7 +269,7 @@ function sendCommand(command: string): Promise<string> {
   });
 }
 
-async function executeWithSecurity(command: string): Promise<string> {
+async function execWithSecurity(command: string, sessionId: string): Promise<string> {
   // Check tier
   const check = isCommandAllowed(command);
   if (!check.allowed) {
@@ -285,7 +293,7 @@ async function executeWithSecurity(command: string): Promise<string> {
   audit(`${tag}EXECUTE: ${command}`);
 
   try {
-    let result = await sendCommand(command);
+    let result = await sendCommand(command, sessionId);
     result = redactSensitiveOutput(command, result);
     const summary = result.length > 80 ? result.slice(0, 80) + "..." : result;
     audit(`${tag}RESULT: ${summary}`);
@@ -475,11 +483,17 @@ ANTI-PATTERNS (avoid these):
 
 Note: Use --no-confirm when starting the server to skip interactive confirmation prompts for write actions.`;
 
-function createMcpServer(): McpServer {
+function createMcpServer(sidRef: { sid: string }): McpServer {
   const server = new McpServer(
     { name: "domshell", version: "1.0.0" },
     { instructions: MCP_INSTRUCTIONS }
   );
+
+  // Every tool runs commands through this closure so each EXECUTE carries the
+  // MCP session id — the extension routes it to that session's own lane
+  // (PRD-002 Phase 2). sidRef.sid is filled by onsessioninitialized before any
+  // tool can be invoked. (Shadows the module-level execWithSecurity by design.)
+  const executeWithSecurity = (command: string) => execWithSecurity(command, sidRef.sid);
 
   // -- Read tier tools (always available) --
 
@@ -1044,39 +1058,24 @@ async function main() {
 
       // New session — must be an initialize request
       if (!sessionId && isInitializeRequest(req.body)) {
-        // Single-session model (ADR-001 D5): one live client at a time. A new
-        // initialize TAKES OVER — the previous session is closed and the new
-        // client accepted. The original D5 design rejected the newcomer with a
-        // 409, but that left a stale session permanently locking out reconnects:
-        // an ungraceful disconnect (no HTTP DELETE) never fires the transport's
-        // onclose, so activeMcpSessionId was never cleared.
-        if (activeMcpSessionId) {
-          const stale = activeMcpSessionId;
-          log(`New client taking over — closing previous MCP session ${stale}`);
-          const oldTransport = transports[stale];
-          activeMcpSessionId = null;
-          sessionStartSent = false;
-          if (oldTransport) {
-            delete transports[stale];
-            oldTransport.close().catch(() => { /* already closed */ });
-          }
-        }
+        // Multi-session (PRD-002 Phase 2): every MCP client gets its own
+        // session — its own tab group and its own shell state. No
+        // single-session limit; concurrent agents coexist without collision.
+        const sidRef = { sid: "" };
 
         const transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (sid) => {
             log(`MCP session initialized: ${sid}`);
             transports[sid] = transport;
-            activeMcpSessionId = sid;
-            sessionStartSent = false;
-            // Give this session its own isolated tab group (ADR-001 D3). Sent
-            // exactly once per session; the HELLO handler retries only if this
-            // initial send drops (extension not yet connected).
-            if (extensionGrouping) {
+            sidRef.sid = sid;
+            // Give this session its own isolated tab group (ADR-001 D3).
+            if (extensionGrouping &&
+                sendToExtension({ type: "SESSION_START", sessionId: sid, mode: "isolated" })) {
               log(`→ sending SESSION_START to extension (session ${sid})`);
-              sessionStartSent = sendToExtension({ type: "SESSION_START", sessionId: sid, mode: "isolated" });
             } else {
-              log(`→ SESSION_START deferred — extension not connected / grouping not negotiated yet`);
+              log(`→ SESSION_START deferred — extension not connected yet (session ${sid})`);
+              pendingSessionStarts.add(sid);
             }
           },
         });
@@ -1086,15 +1085,12 @@ async function main() {
           if (sid) {
             log(`MCP session closed: ${sid}`);
             delete transports[sid];
-            if (activeMcpSessionId === sid) {
-              activeMcpSessionId = null;
-              sessionStartSent = false;
-              sendToExtension({ type: "SESSION_END", sessionId: sid });
-            }
+            pendingSessionStarts.delete(sid);
+            sendToExtension({ type: "SESSION_END", sessionId: sid });
           }
         };
 
-        const server = createMcpServer();
+        const server = createMcpServer(sidRef);
         await server.connect(transport);
         console.error(`[DOMShell] New MCP session connected (sid: ${sessionId})`);
         await transport.handleRequest(req, res, req.body);

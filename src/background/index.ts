@@ -75,6 +75,37 @@ function saveSession(id: string): void {
   s.commandHistory = commandHistory;
 }
 
+/** The Chrome window a side-panel session belongs to, or null (the MCP
+ *  session, or before the window is known). Derived from the "win:<id>" key. */
+function currentSessionWindowId(): number | null {
+  if (currentSessionId.startsWith("win:")) {
+    const n = parseInt(currentSessionId.slice(4), 10);
+    return Number.isNaN(n) ? null : n;
+  }
+  return null;
+}
+
+/** Load a session's persisted durable state (Sprint 03 increment 4). Restores
+ *  the browser-level path, env, and history; an in-tab path is dropped because
+ *  the CDP attachment behind it does not survive a service-worker restart. */
+async function loadSessionState(s: Session): Promise<void> {
+  try {
+    const key = "domshell_session_" + s.id;
+    const stored = await chrome.storage.local.get(key);
+    const d: any = stored[key];
+    if (!d || typeof d !== "object") return;
+    if (Array.isArray(d.path) && getTabIdFromPath(d.path) === null) {
+      s.state.path = d.path;
+    }
+    if (d.env && typeof d.env === "object") {
+      s.state.env = { ...s.state.env, ...d.env };
+    }
+    if (Array.isArray(d.history)) {
+      s.commandHistory = d.history.slice(-500);
+    }
+  } catch { /* fresh session */ }
+}
+
 /** Swap the named session into the module working vars. MUST run inside
  *  runSerialized() — never concurrently. Re-establishes DOM context if the AX
  *  tree currently loaded belongs to a different session's tab. */
@@ -98,6 +129,7 @@ async function swapToSession(id: string): Promise<void> {
       commandHistory: [],
     };
     sessions.set(id, s);
+    await loadSessionState(s);  // restore this session's persisted durable state
   }
 
   state = s.state;
@@ -188,17 +220,19 @@ const WRITE_NAVIGATE_COMMANDS = new Set([
 /** Persist shell state to chrome.storage.local for service worker restart resilience. */
 function persistState(): void {
   chrome.storage.local.set({
-    domshell_path: state.path,
-    domshell_env: state.env,
+    // Global — shared across all sessions.
     domshell_bookmarks: bookmarks,
     domshell_scripts: scripts,
-    domshell_history: commandHistory.slice(-500),
     domshell_group: {
-      mode: groupMode,
-      groupId: sessionGroupId,
-      groupName: sessionGroupName,
       createdGroupIds: [...createdGroupIds],
       createdTabIds: [...createdTabIds],
+    },
+    // This session's durable state, keyed by session id (Sprint 03 increment 4).
+    // The volatile AX snapshot is not persisted — it is re-derived on resume.
+    ["domshell_session_" + currentSessionId]: {
+      path: state.path,
+      env: state.env,
+      history: commandHistory.slice(-500),
     },
   });
 }
@@ -247,14 +281,25 @@ async function expandPathVariable(target: string): Promise<string> {
 
   if (!target.includes("%here%")) return target;
 
-  const lastFocused = await chrome.windows.getLastFocused({ populate: true });
-  const activeTab = lastFocused.tabs?.find(t => t.active);
-  if (!activeTab?.id || !lastFocused.id) {
+  // %here% resolves to the active tab of THIS session's own window — not the
+  // globally last-focused window (Sprint 03 — Multi-Session). The MCP session
+  // has no window and falls back to the last-focused window.
+  const winId = currentSessionWindowId();
+  let win: chrome.windows.Window;
+  try {
+    win = winId !== null
+      ? await chrome.windows.get(winId, { populate: true })
+      : await chrome.windows.getLastFocused({ populate: true });
+  } catch {
+    win = await chrome.windows.getLastFocused({ populate: true });
+  }
+  const activeTab = win.tabs?.find((t) => t.active);
+  if (!activeTab?.id || !win.id) {
     throw new Error("No active tab found");
   }
 
   // Expand to window-based path so %here%/.. goes to the window
-  const expanded = `~/windows/${lastFocused.id}/${activeTab.id}`;
+  const expanded = `~/windows/${win.id}/${activeTab.id}`;
   return target.replace("%here%", expanded);
 }
 
@@ -3368,7 +3413,12 @@ function currentPrompt(): string {
 async function maybeAutoAttach(): Promise<void> {
   if (groupMode === "isolated") return;  // already attached (e.g. restored)
   try {
-    const win = await chrome.windows.getLastFocused({ populate: true });
+    // Check THIS session's own window (Sprint 03 — Multi-Session), not the
+    // globally last-focused one.
+    const winId = currentSessionWindowId();
+    const win = winId !== null
+      ? await chrome.windows.get(winId, { populate: true })
+      : await chrome.windows.getLastFocused({ populate: true });
     const activeTab = win.tabs?.find((t) => t.active);
     if (!activeTab || activeTab.groupId === undefined || activeTab.groupId < 0) return;
     const g = await chrome.tabGroups.get(activeTab.groupId);

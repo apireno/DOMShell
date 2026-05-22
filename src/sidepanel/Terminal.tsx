@@ -13,6 +13,7 @@ export default function Terminal() {
   const historyRef = useRef<string[]>([]);
   const historyIndex = useRef(-1);
   const completionPending = useRef(false);
+  const windowIdRef = useRef<number | null>(null);  // this panel's Chrome window — its session key (Sprint 03)
   // Prompt is dynamic — the background sends it (it reflects the attached group).
   const promptRef = useRef(DEFAULT_PROMPT);
 
@@ -64,6 +65,9 @@ export default function Terminal() {
     const port = chrome.runtime.connect({ name: "domshell" });
     portRef.current = port;
 
+    // Each side panel is its own session, keyed by its Chrome window
+    // (Sprint 03 — Multi-Session). Resolved async; READY waits for it.
+
     // Handle messages from the background
     port.onMessage.addListener((msg) => {
       if (msg.type === "STDOUT" || msg.type === "STDERR") {
@@ -77,8 +81,14 @@ export default function Terminal() {
       }
     });
 
-    // Tell the background we're ready
-    port.postMessage({ type: "READY" });
+    // Resolve our window, then tell the background we're ready.
+    chrome.windows
+      .getCurrent()
+      .then((w) => {
+        windowIdRef.current = w.id ?? null;
+        port.postMessage({ type: "READY", windowId: windowIdRef.current });
+      })
+      .catch(() => port.postMessage({ type: "READY" }));
 
     // Use onData for ALL input — handles both typing and paste
     term.onData((data) => {
@@ -89,7 +99,7 @@ export default function Terminal() {
         if (command) {
           historyRef.current.push(command);
           historyIndex.current = historyRef.current.length;
-          port.postMessage({ type: "STDIN", input: command });
+          port.postMessage({ type: "STDIN", input: command, windowId: windowIdRef.current });
         } else {
           writePrompt();
         }
@@ -177,7 +187,7 @@ export default function Terminal() {
     }
 
     completionPending.current = true;
-    port.postMessage({ type: "COMPLETE", partial, command, line });
+    port.postMessage({ type: "COMPLETE", partial, command, line, windowId: windowIdRef.current });
   }
 
   function handleCompletionResponse(

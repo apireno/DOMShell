@@ -1044,14 +1044,22 @@ async function main() {
 
       // New session — must be an initialize request
       if (!sessionId && isInitializeRequest(req.body)) {
-        // Single-session enforcement (ADR-001 D5): reject a 2nd concurrent client.
+        // Single-session model (ADR-001 D5): one live client at a time. A new
+        // initialize TAKES OVER — the previous session is closed and the new
+        // client accepted. The original D5 design rejected the newcomer with a
+        // 409, but that left a stale session permanently locking out reconnects:
+        // an ungraceful disconnect (no HTTP DELETE) never fires the transport's
+        // onclose, so activeMcpSessionId was never cleared.
         if (activeMcpSessionId) {
-          res.status(409).json({
-            jsonrpc: "2.0",
-            error: { code: -32000, message: "DOMShell MCP server is single-session — another client is already connected. Disconnect it first." },
-            id: null,
-          });
-          return;
+          const stale = activeMcpSessionId;
+          log(`New client taking over — closing previous MCP session ${stale}`);
+          const oldTransport = transports[stale];
+          activeMcpSessionId = null;
+          sessionStartSent = false;
+          if (oldTransport) {
+            delete transports[stale];
+            oldTransport.close().catch(() => { /* already closed */ });
+          }
         }
 
         const transport = new StreamableHTTPServerTransport({

@@ -364,8 +364,9 @@ function wsConnect(): void {
             }
           }
 
-          // Execute the command and send the result back
-          const output = await executeCommand(msg.command);
+          // Execute the command and send the result back. Serialized against
+          // side-panel commands so the two clients never corrupt the cursor.
+          const output = await runSerialized(() => executeCommand(msg.command));
           const cleanOutput = stripAnsi(output);
 
           ws?.send(JSON.stringify({
@@ -585,7 +586,7 @@ chrome.runtime.onConnect.addListener((port) => {
 
   port.onMessage.addListener(async (msg) => {
     if (msg.type === "STDIN") {
-      const output = await executeCommand(msg.input);
+      const output = await runSerialized(() => executeCommand(msg.input));
       port.postMessage({ type: "STDOUT", output, prompt: currentPrompt() });
     } else if (msg.type === "COMPLETE") {
       const matches = await getCompletions(msg.partial, msg.command, msg.line);
@@ -1468,6 +1469,23 @@ function grepLines(output: string, pattern: string, limit: number): string {
     }
   }
   return matches.length > 0 ? matches.join("\r\n") : "\x1b[90m(no matches)\x1b[0m";
+}
+
+// ---- Command serialization (Sprint 03 — Multi-Session, ADR-003 D3) ----
+// Every command runs to completion before the next begins. Two clients — two
+// side panels, or a side panel and the MCP bridge — can no longer interleave
+// and corrupt the shared shell cursor (the B8 raced `cd`/`ls` failure).
+// This is also the precondition for the per-session swap-in/out model: a single
+// module-level cursor is only safe while exactly one command is in flight.
+let commandQueue: Promise<unknown> = Promise.resolve();
+
+/** Run `fn` after every previously-queued command finishes — strictly serial.
+ *  Wrap command *entry points* (port STDIN, bridge EXECUTE) with this — never
+ *  `executeCommand` itself, which recurses (`!n` recall, pipes) and would deadlock. */
+function runSerialized<T>(fn: () => Promise<T>): Promise<T> {
+  const result = commandQueue.then(fn, fn);
+  commandQueue = result.catch(() => {});
+  return result;
 }
 
 async function executeCommand(raw: string): Promise<string> {

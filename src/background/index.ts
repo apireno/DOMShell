@@ -81,17 +81,6 @@ function saveSession(id: string): void {
 async function swapToSession(id: string): Promise<void> {
   if (id === currentSessionId && sessions.has(id)) return;
 
-  // First swap ever: adopt the module state restoreState() populated at startup
-  // as this session, so the first console persists exactly as it did before.
-  if (sessions.size === 0) {
-    sessions.set(id, {
-      id, state, groupMode, sessionGroupId, sessionGroupName,
-      sessionGroupDisrupted, commandHistory,
-    });
-    currentSessionId = id;
-    return;
-  }
-
   saveSession(currentSessionId);
 
   let s = sessions.get(id);
@@ -595,35 +584,21 @@ chrome.storage.local.get(["ws_enabled", "ws_token", "ws_port"], (result) => {
 
 // Restore shell state on service worker restart
 chrome.storage.local.get(
-  ["domshell_path", "domshell_env", "domshell_bookmarks", "domshell_scripts", "domshell_history", "domshell_group"],
+  ["domshell_bookmarks", "domshell_scripts", "domshell_group"],
   (result) => {
-    if (Array.isArray(result.domshell_path)) {
-      state.path = result.domshell_path;
-      // A path inside a tab needs a live CDP attachment, which does not survive
-      // a service-worker restart. Drop such paths to the browser root so the
-      // shell always starts somewhere usable — `ls` shows windows/ and tabs/.
-      // Browser-level paths (root, tabs/, windows/) restore fine.
-      if (getTabIdFromPath(state.path) !== null) {
-        state.path = [];
-      }
-    }
-    if (result.domshell_env && typeof result.domshell_env === "object") {
-      state.env = { ...state.env, ...result.domshell_env };
-    }
+    // Global preferences — shared across all sessions.
     if (result.domshell_bookmarks && typeof result.domshell_bookmarks === "object") {
       bookmarks = result.domshell_bookmarks;
     }
     if (result.domshell_scripts && typeof result.domshell_scripts === "object") {
       scripts = result.domshell_scripts;
     }
-    if (Array.isArray(result.domshell_history)) {
-      commandHistory = result.domshell_history.slice(-500);
-    }
+    // DOMShell's tab/group footprint — global cleanup tracking (createdGroupIds /
+    // createdTabIds). The per-session cursor, group binding, and history are NOT
+    // restored globally — each session starts fresh in `shared` mode at the
+    // browser root. Per-session persistence is Sprint 03 increment 4.
     if (result.domshell_group && typeof result.domshell_group === "object") {
       const g: any = result.domshell_group;
-      groupMode = g.mode === "isolated" ? "isolated" : "shared";
-      sessionGroupId = typeof g.groupId === "number" ? g.groupId : null;
-      sessionGroupName = typeof g.groupName === "string" ? g.groupName : null;
       createdGroupIds = new Set(Array.isArray(g.createdGroupIds) ? g.createdGroupIds : []);
       createdTabIds = new Set(Array.isArray(g.createdTabIds) ? g.createdTabIds : []);
     }

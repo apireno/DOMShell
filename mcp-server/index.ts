@@ -1020,10 +1020,10 @@ NOTES
         if (lane === "new" && r.laneId) lane = r.laneId;
       }
       out.push(`\n[lane: ${laneId ?? "shared"}]`);
-      return {
-        content: [{ type: "text", text: out.join("\n") }],
-        structuredContent: { group_id: laneId },
-      };
+      // The lane id rides in the text content, NOT structuredContent — Claude
+      // Desktop renders only structuredContent when present and suppresses the
+      // text entirely. The text is the one channel every client surfaces.
+      return { content: [{ type: "text", text: out.join("\n") }] };
     }
   );
 

@@ -2582,9 +2582,15 @@ async function navigateOneSegment(segment: string): Promise<string> {
   return `\x1b[31mcd: ${segment}: Cannot navigate deeper\x1b[0m`;
 }
 
+/** URL schemes Chrome forbids CDP (and therefore DOMShell) from debugging —
+ *  chrome://, devtools://, the new-tab page, view-source:, etc. */
+function undebuggableUrl(url: string): boolean {
+  return /^(chrome|chrome-untrusted|devtools|edge|brave|view-source):/i.test(url.trim());
+}
+
 /**
  * Enter a tab by ID or substring match.
- * Pushes the tab ID onto state.path, attaches CDP, and loads AX tree.
+ * Attaches CDP, loads the AX tree, then commits the tab ID to state.path.
  */
 async function enterTab(target: string): Promise<string> {
   try {
@@ -2603,6 +2609,15 @@ async function enterTab(target: string): Promise<string> {
         return `\x1b[31mcd: tab ${tab.id} is outside the session group (id ${sessionGroupId}). ` +
           `Commands are confined to the group — run 'group detach' to leave isolated mode.\x1b[0m`;
       }
+    }
+
+    // Chrome forbids CDP from debugging its internal pages (chrome://,
+    // devtools://, the new-tab page, …). Catch them up front with a clear,
+    // actionable message instead of surfacing a raw CDP error.
+    const tabUrl = tab.url ?? tab.pendingUrl ?? "";
+    if (undebuggableUrl(tabUrl)) {
+      return `\x1b[31mcd: tab ${tab.id} is a browser-internal page (${tabUrl}) that ` +
+        `Chrome won't let DOMShell inspect. Run 'tabs' and pick a regular web page.\x1b[0m`;
     }
 
     // Attach CDP and load the AX tree BEFORE committing the path. A failed
@@ -2628,7 +2643,12 @@ async function enterTab(target: string): Promise<string> {
     lines.push("");
     return lines.join("\r\n");
   } catch (err: any) {
-    return `\x1b[31mcd: ${err.message}\x1b[0m`;
+    const m = String(err?.message ?? err);
+    if (/cannot access|chrome:\/\/|devtools|cannot be debugged|detached/i.test(m)) {
+      return `\x1b[31mcd: that tab can't be inspected by DOMShell (${m}). ` +
+        `It is likely a browser-internal page — run 'tabs' and pick a regular web page.\x1b[0m`;
+    }
+    return `\x1b[31mcd: ${m}\x1b[0m`;
   }
 }
 

@@ -24,6 +24,7 @@ const ALLOW_WRITE = hasFlag("--allow-write") || hasFlag("--allow-all");
 const ALLOW_SENSITIVE = hasFlag("--allow-sensitive") || hasFlag("--allow-all");
 const NO_CONFIRM = hasFlag("--no-confirm");
 const EXPOSE_COOKIES = hasFlag("--expose-cookies");
+const GRANULAR = hasFlag("--granular");  // expose the 38 per-command tools (ADR-002 D2)
 const PORT = parseInt(getFlagValue("--port", "9876"), 10);
 const MCP_PORT = parseInt(getFlagValue("--mcp-port", "3001"), 10);
 const LOG_FILE = getFlagValue("--log-file", "audit.log");
@@ -129,6 +130,9 @@ function redactSensitiveOutput(command: string, output: string): string {
 // ---- WebSocket Server (Extension Bridge) ----
 
 let extensionClient: WebSocket | null = null;
+let extensionGrouping = false;                 // connected extension supports tab grouping? (HELLO, ADR-001 D11)
+let activeMcpSessionId: string | null = null;  // single-session enforcement (ADR-001 D5)
+let sessionStartSent = false;                  // SESSION_START delivered for the active session? (once per session, never per reconnect)
 const pendingRequests = new Map<
   string,
   { resolve: (result: string) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }
@@ -184,6 +188,18 @@ wss.on("connection", (ws, req) => {
           pendingRequests.delete(msg.id);
           pending.resolve(msg.result ?? "");
         }
+      } else if (msg.type === "HELLO") {
+        // Capability handshake (ADR-001 D11).
+        extensionGrouping = Array.isArray(msg.capabilities) && msg.capabilities.includes("grouping");
+        log(`Extension v${msg.version ?? "?"} (build: ${msg.build ?? "unknown"}) connected — grouping ${extensionGrouping ? "supported" : "NOT supported (legacy mode)"}`);
+        // Deliver SESSION_START once per session: if a session is active but
+        // SESSION_START has not reached the extension yet (it connected after
+        // the session began, or an earlier send dropped), send it now. NOT on
+        // every reconnect — doing that spawned a duplicate agent group each time.
+        if (activeMcpSessionId && extensionGrouping && !sessionStartSent) {
+          log(`→ delivering deferred SESSION_START to extension (session ${activeMcpSessionId})`);
+          sessionStartSent = sendToExtension({ type: "SESSION_START", sessionId: activeMcpSessionId, mode: "isolated" });
+        }
       } else if (msg.type === "pong") {
         // Heartbeat response — ignore
       }
@@ -208,6 +224,16 @@ wss.on("connection", (ws, req) => {
 });
 
 // ---- Send Command to Extension ----
+
+/** Fire-and-forget a control message to the extension (SESSION_START/END, etc.). */
+function sendToExtension(obj: Record<string, unknown>): boolean {
+  if (extensionClient && extensionClient.readyState === 1) {
+    extensionClient.send(JSON.stringify(obj));
+    return true;
+  }
+  log(`⚠ sendToExtension: dropped a '${obj.type ?? "?"}' message — extension socket not open`);
+  return false;
+}
 
 function sendCommand(command: string): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -275,6 +301,22 @@ async function executeWithSecurity(command: string): Promise<string> {
 // All instances share the same WebSocket bridge to the Chrome extension.
 
 const MCP_INSTRUCTIONS = `DOMShell gives you full browser control through a filesystem metaphor. The DOM's Accessibility Tree (AXTree) is mapped to directories (containers like navigation/, main/, form/) and files (interactive elements like submit_btn, search_input, login_link). The browser itself (windows, tabs) is also part of the hierarchy.
+
+INTERFACE — ONE TOOL
+You drive DOMShell through a single tool: domshell_execute. Pass a command string ("ls", "cd tabs/123", "text main"). To run a whole workflow in ONE call, pass MULTIPLE commands separated by newlines — each line runs in order and the combined output is returned:
+  domshell_execute("open https://example.com\\ncd main\\ntext")
+Most commands accept relative paths, so you rarely need a separate cd: "text main/article", "click form/submit_btn".
+NAMING NOTE: this guide sometimes writes a command as "domshell_<name>" (e.g. domshell_text) — that simply means the "<name>" command (e.g. "text"). Run any command via domshell_execute, e.g. domshell_execute("text main"). (If the server was started with --granular, each command is ALSO exposed as its own domshell_<name> tool — but domshell_execute is the primary, recommended interface.)
+
+COMMAND REFERENCE
+Browser & tabs: tabs · windows · here · cd <path> · open <url> · navigate <url> · back · forward · close [id] · group [new|attach|detach|close|list]
+Reading: ls [--meta --text --json] · cat <name> · text [name] [--links] · tree [depth] · read [name] · grep [-r] <pattern> · find [--type ROLE --meta --text] <pattern> · extract_links · extract_table <name> · screenshot · diff
+Interacting (write tier, needs --allow-write): click <name> · focus <name> · type <text> · select <name> <value> · scroll down|up|<name> · submit <input> <value> · wait <pattern>
+JavaScript: eval <expr> (read-only, always available) · js <code> (write tier) · functions [pattern] · call <fn> <args>
+Workflow: watch <cmd> [--until-change] · for "<cmd>" : <template> · script save|run|list|show|delete · each [--pattern F] <cmd> · bookmark <name> · env · export · history · pwd · refresh
+
+TAB GROUPS (isolation)
+DOMShell can run inside an isolated Chrome tab group — its own lane, separate from the user's other tabs. Run "group" to see the current mode. "group new [name]" creates an isolated group; "group attach <id>", "group detach", "group close", "group list" manage them. While in an isolated group, tabs / windows / cd are ALL confined to that group — you only see and act on the group's tabs. Run "group" anytime to check whether you are scoped. The session's group is left open after you disconnect — when you finish a task, it is courteous to ask the user whether they want it closed ("group close") rather than leaving it behind for them.
 
 WHEN TO USE DOMSHELL (prefer over native browser tools):
 - Navigating to websites: use domshell_navigate or domshell_open
@@ -441,6 +483,10 @@ function createMcpServer(): McpServer {
 
   // -- Read tier tools (always available) --
 
+  // Granular per-command tools (ADR-002 D2) — registered only with --granular.
+  // Default mode exposes domshell_execute alone (registered below). Block left
+  // un-reindented to keep the diff reviewable; see ADR-002.
+  if (GRANULAR) {
   server.tool(
     "domshell_tabs",
     "List all open browser tabs with their IDs, titles, URLs, and window info. Use this to find the right tab before switching. Equivalent to 'ls ~/tabs/'.",
@@ -896,19 +942,52 @@ function createMcpServer(): McpServer {
       })
     );
   }
+  }  // end granular per-command tools (ADR-002)
 
-  // -- Fallback execute tool --
+  // -- Primary interface: domshell_execute (always registered) --
 
   server.tool(
     "domshell_execute",
-    "Execute any DOMShell command. Use this for commands not covered by specific tools (e.g. 'env', 'export', 'debug stats'). Supports pipe operator: 'find --type link --meta | grep github'. Write and sensitive commands are subject to the same security restrictions.",
-    { command: z.string().describe("The full command to execute (e.g. 'ls -l', 'debug stats', 'find --type link | grep login')") },
-    async ({ command }) => ({
-      content: [{ type: "text", text: await executeWithSecurity(command) }],
-    })
+    `Run DOMShell commands to browse and read web pages — the primary DOMShell interface. DOMShell maps a page's accessibility tree to a filesystem: containers are directories, interactive elements are files; browser windows and tabs are part of the same hierarchy.
+
+Send ONE command, or MULTIPLE commands separated by newlines to run a whole workflow in a single call:
+  open https://example.com
+  cd main
+  text
+The pipe operator works within a command: find --type link --meta | grep github
+Most commands accept relative paths, so a separate cd is rarely needed: text main/article, click form/submit_btn.
+
+COMMAND REFERENCE
+Browser & tabs: tabs · windows · here · cd <path> · open <url> · navigate <url> · back · forward · close [id] · group [new|attach|detach|close|list]
+Reading: ls [--meta --text --json] · cat <name> · text [name] [--links] · tree [depth] · read [name] · grep [-r] <pattern> · find [--type ROLE --meta --text] <pattern> · extract_links · extract_table <name> · screenshot · diff
+Interacting (write tier): click <name> · focus <name> · type <text> · select <name> <value> · scroll down|up|<name> · submit <input> <value> · wait <pattern>
+JavaScript: eval <expr> (read-only) · js <code> (write) · functions [pattern] · call <fn> <args>
+Workflow: watch <cmd> [--until-change] · for "<cmd>" : <template> · script save|run|list · each [--pattern F] <cmd> · bookmark <name> · env · history · pwd · help
+
+NOTES
+- Enter a tab with "cd tabs/<id>" from the browser root; "open <url>" already opens AND enters a new tab (no flags).
+- "cd .." moves up one level; from a tab's root it exits to the browser level.
+- Run "help" for the full command list, or "<command> --help" for one command's usage.
+- The session may run in an isolated tab group — run "group" to check; commands are then confined to that group.
+- The session's "agent" tab group is left open after you disconnect. When you finish a task, it is courteous to ask the user whether to close it — run "group close" only if they say yes.
+- Write and sensitive commands obey the server's security tiers.`,
+    { command: z.string().describe("A DOMShell command, or multiple commands separated by newlines (e.g. 'ls -l' or 'open example.com\\ncd main\\ntext')") },
+    async ({ command }) => {
+      // Multi-command: each non-blank line runs in sequence (ADR-002 D3).
+      const lines = command.split("\n").map((l) => l.trim()).filter(Boolean);
+      if (lines.length <= 1) {
+        return { content: [{ type: "text", text: await executeWithSecurity(command.trim()) }] };
+      }
+      const out: string[] = [];
+      for (const line of lines) {
+        out.push(`$ ${line}`);
+        out.push(await executeWithSecurity(line));
+      }
+      return { content: [{ type: "text", text: out.join("\n") }] };
+    }
   );
 
-  console.error("[DOMShell] MCP server created with all tool registrations");
+  console.error(`[DOMShell] MCP server created (${GRANULAR ? "granular" : "single-tool"} mode)`);
   return server;
 }
 
@@ -965,11 +1044,40 @@ async function main() {
 
       // New session — must be an initialize request
       if (!sessionId && isInitializeRequest(req.body)) {
+        // Single-session model (ADR-001 D5): one live client at a time. A new
+        // initialize TAKES OVER — the previous session is closed and the new
+        // client accepted. The original D5 design rejected the newcomer with a
+        // 409, but that left a stale session permanently locking out reconnects:
+        // an ungraceful disconnect (no HTTP DELETE) never fires the transport's
+        // onclose, so activeMcpSessionId was never cleared.
+        if (activeMcpSessionId) {
+          const stale = activeMcpSessionId;
+          log(`New client taking over — closing previous MCP session ${stale}`);
+          const oldTransport = transports[stale];
+          activeMcpSessionId = null;
+          sessionStartSent = false;
+          if (oldTransport) {
+            delete transports[stale];
+            oldTransport.close().catch(() => { /* already closed */ });
+          }
+        }
+
         const transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (sid) => {
             log(`MCP session initialized: ${sid}`);
             transports[sid] = transport;
+            activeMcpSessionId = sid;
+            sessionStartSent = false;
+            // Give this session its own isolated tab group (ADR-001 D3). Sent
+            // exactly once per session; the HELLO handler retries only if this
+            // initial send drops (extension not yet connected).
+            if (extensionGrouping) {
+              log(`→ sending SESSION_START to extension (session ${sid})`);
+              sessionStartSent = sendToExtension({ type: "SESSION_START", sessionId: sid, mode: "isolated" });
+            } else {
+              log(`→ SESSION_START deferred — extension not connected / grouping not negotiated yet`);
+            }
           },
         });
 
@@ -978,6 +1086,11 @@ async function main() {
           if (sid) {
             log(`MCP session closed: ${sid}`);
             delete transports[sid];
+            if (activeMcpSessionId === sid) {
+              activeMcpSessionId = null;
+              sessionStartSent = false;
+              sendToExtension({ type: "SESSION_END", sessionId: sid });
+            }
           }
         };
 
@@ -1045,6 +1158,7 @@ async function main() {
     log(`  connect ${AUTH_TOKEN}`);
     log("");
     log(`Security: write=${ALLOW_WRITE ? "ON" : "OFF"}, sensitive=${ALLOW_SENSITIVE ? "ON" : "OFF"}, confirm=${!NO_CONFIRM ? "ON" : "OFF"}`);
+    log(`Tools: ${GRANULAR ? "granular (38 per-command tools)" : "single-tool (domshell_execute) — pass --granular for the per-command tools"}`);
     if (ALLOWED_DOMAINS.length > 0) {
       log(`Domains: ${ALLOWED_DOMAINS.join(", ")}`);
     } else {

@@ -40,6 +40,7 @@ let createdTabIds = new Set<number>();    // tabs DOMShell opened (non-destructi
 let sessionGroupDisrupted = false;        // session group removed externally (ADR-001 D7)
 let groupSeq = 0;                         // disambiguates default group names
 let sessionGroupName: string | null = null; // attached group's display name (prompt host)
+let mcpSessionActive = false;             // an MCP session created the current group (ADR-001 D3)
 
 /** Lazy cache for visible text (innerText), keyed by backendDOMNodeId. Cleared on tree rebuild. */
 let textContentCache: Map<number, string> = new Map();
@@ -284,7 +285,16 @@ function wsConnect(): void {
       wsConnected = true;
       setWsStatus("connected");
       startKeepaliveAlarm();
-      console.log("[DOMShell] WebSocket connected to MCP server");
+      console.log(`[DOMShell] WebSocket connected to MCP server — extension v${chrome.runtime.getManifest().version} (build sprint-02-b3-diag)`);
+
+      // Capability handshake (ADR-001 D11) — let a grouping-aware MCP server
+      // know this extension supports tab groups.
+      ws?.send(JSON.stringify({
+        type: "HELLO",
+        version: chrome.runtime.getManifest().version,
+        capabilities: ["grouping"],
+        build: "sprint-02-b3-diag",
+      }));
 
       // Start heartbeat to keep MV3 service worker alive
       if (wsHeartbeatTimer) clearInterval(wsHeartbeatTimer);
@@ -295,9 +305,42 @@ function wsConnect(): void {
       }, 20000);
     };
 
-    ws.onmessage = async (event) => {
+    // Bridge messages are processed strictly one at a time. SESSION_START's
+    // groupNew() must fully finish before a following EXECUTE is handled —
+    // otherwise a command can observe the half-built (still "shared") state.
+    let bridgeMsgChain: Promise<void> = Promise.resolve();
+    const handleBridgeMessage = async (event: MessageEvent): Promise<void> => {
       try {
         const msg = JSON.parse(typeof event.data === "string" ? event.data : "");
+
+        if (msg.type === "SESSION_START") {
+          // An MCP session started — give it a fresh isolated group (ADR-001 D3).
+          // SESSION_START fires once per MCP client session, so each session
+          // gets its own clean lane. Discard any persisted state first: a fresh
+          // connect can restore stale "isolated" state (chrome.storage) — a
+          // closed group, or a still-live leftover group from a prior session.
+          // Reusing either would inherit stale tabs and the wrong group name.
+          console.log("[DOMShell] SESSION_START received — creating fresh 'agent' group");
+          groupMode = "shared";
+          sessionGroupId = null;
+          sessionGroupName = null;
+          sessionGroupDisrupted = false;
+          const startResult = await groupNew(["agent"]);
+          console.log("[DOMShell] SESSION_START → groupNew:", startResult.replace(/\x1b\[[0-9;]*m/g, ""));
+          mcpSessionActive = true;
+          return;
+        }
+
+        if (msg.type === "SESSION_END") {
+          // Non-destructive teardown (PRD-001 Req 7) — detach, leave the group open.
+          // Gate on groupMode, not the non-persisted mcpSessionActive flag: a
+          // service-worker restart mid-session would otherwise strand the state.
+          if (groupMode === "isolated") {
+            await groupDetach();
+          }
+          mcpSessionActive = false;
+          return;
+        }
 
         if (msg.type === "EXECUTE" && msg.command) {
           // Domain allowlist check
@@ -334,6 +377,9 @@ function wsConnect(): void {
       } catch {
         // Ignore malformed messages
       }
+    };
+    ws.onmessage = (event) => {
+      bridgeMsgChain = bridgeMsgChain.then(() => handleBridgeMessage(event));
     };
 
     ws.onclose = () => {

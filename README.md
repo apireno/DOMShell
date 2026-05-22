@@ -1159,6 +1159,7 @@ The table below lists the per-command tools exposed when the server runs with `-
 - [x] **`diff`** — compare AX tree snapshots to see what changed after an action (auto-snapshots before click/submit/navigate)
 - [ ] **Session tab-group isolation** — each session's tabs are placed in a labeled Chrome tab group and every command is confined to that group, so the agent works in its own lane while you keep browsing freely in other tabs of the same window ([#32](https://github.com/apireno/DOMShell/issues/32))
 - [ ] **Multi-session DOMShell** — every side-panel console and every MCP connection gets its own independent shell session (its own current directory, tab, and DOM cursor), so multiple human consoles and concurrent agents each work in an isolated lane instead of sharing one global cursor ([#33](https://github.com/apireno/DOMShell/issues/33))
+- [ ] **Agent-declared sessions** — an optional `group_id` on `domshell_execute` lets an agent address a specific lane: omit it for the current lane, `"new"` for a fresh one, or pass an id to join an existing lane — so two agent chats sharing one MCP connection stay isolated, and one agent can hand a session off to another ([#34](https://github.com/apireno/DOMShell/issues/34))
 
 ### Platform
 

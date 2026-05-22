@@ -2516,7 +2516,11 @@ async function navigateOneSegment(segment: string): Promise<string> {
       try {
         await cdpSwitchToTab(tabId);
       } catch (err: any) {
-        return `\x1b[31mFailed to attach to tab ${tabId}: ${err.message}\x1b[0m`;
+        // Attach failed — drop to the browser root so the shell is not wedged
+        // inside an unreachable tab.
+        state.path = [];
+        state.axNodeIds = [];
+        return `\x1b[31mFailed to attach to tab ${tabId}: ${err.message} — returned to ~\x1b[0m`;
       }
     }
 
@@ -2601,11 +2605,13 @@ async function enterTab(target: string): Promise<string> {
       }
     }
 
-    // Push tab ID onto path
-    state.path.push(String(tab.id));
-
-    // Attach CDP and load AX tree
+    // Attach CDP and load the AX tree BEFORE committing the path. A failed
+    // attach (e.g. a chrome:// page that cannot be debugged) must not leave
+    // state.path stuck on an unreachable tab — that wedges every later command.
     const { nodeCount, iframeCount } = await cdpSwitchToTab(tab.id);
+
+    // Attach succeeded — commit the tab to the path.
+    state.path.push(String(tab.id));
 
     const title = tab.title ?? "unknown";
     const url = tab.url ?? "unknown";

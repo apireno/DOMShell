@@ -207,6 +207,10 @@ Subcommands: `group` (status), `group new [name]`, `group attach <id>`, `group d
 
 When an MCP client connects, DOMShell automatically gives that session its own fresh `🐚 agent` group. The group is **left open** when the session disconnects (non-destructive) — the agent is instructed to ask whether you'd like it closed before it wraps up, and you can always clear leftovers yourself with `group close`.
 
+**Multi-session.** Every DOMShell client gets its own session lane — each side-panel window, each MCP connection, separately isolated. Two side panels in two Chrome windows hold independent positions; multiple concurrent MCP agents each work in their own `🐚 agent` group with their own cursor. Run `group list` anytime to see every active lane; `group close <id>` to close one.
+
+**Multiple agents on one MCP connection.** Some MCP clients (e.g. Claude Desktop) share one connection across every chat — so by default two chats in the same client would land in one lane. Each chat can carve out its own lane by passing the `group_id` parameter to `domshell_execute`: pass `"new"` to create a fresh one (its id is returned at the end of the reply as `[lane: <id>]`), then pass that id on every later call. Two chats → two lanes → no collision. Agents can also use this for **handoff** — one agent reports its lane id, the next agent passes it as `group_id` and continues in the same state. Agents are instructed to close any lane they created when the task is done.
+
 ### Navigating the DOM
 
 Once you're inside a tab, the Accessibility Tree appears as a filesystem:

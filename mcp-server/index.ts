@@ -336,8 +336,21 @@ Interacting (write tier, needs --allow-write): click <name> · focus <name> · t
 JavaScript: eval <expr> (read-only, always available) · js <code> (write tier) · functions [pattern] · call <fn> <args>
 Workflow: watch <cmd> [--until-change] · for "<cmd>" : <template> · script save|run|list|show|delete · each [--pattern F] <cmd> · bookmark <name> · env · export · history · pwd · refresh
 
-TAB GROUPS (isolation)
-DOMShell can run inside an isolated Chrome tab group — its own lane, separate from the user's other tabs. Run "group" to see the current mode. "group new [name]" creates an isolated group; "group attach <id>", "group detach", "group close", "group list" manage them. While in an isolated group, tabs / windows / cd are ALL confined to that group — you only see and act on the group's tabs. Run "group" anytime to check whether you are scoped. The session's group is left open after you disconnect — when you finish a task, it is courteous to ask the user whether they want it closed ("group close") rather than leaving it behind for them.
+LANES (your isolated workspace)
+Every domshell_execute reply ends with a "[lane: <id>]" line — your current lane. A lane is an isolated workspace: its own current tab, DOM cursor, and Chrome tab group, scoped so commands cannot see or touch the user's tabs or any other client's tabs. Inside an isolated lane, tabs / windows / cd are ALL confined to its group.
+
+Your MCP connection gets its OWN lane automatically. You typically need nothing more — just call domshell_execute and the default lane handles it.
+
+When you need MULTIPLE lanes — parallel tasks, or you share one MCP connection with another agent (Claude Desktop multiplexes every chat over one connection, so two chats would land in one lane by default) — use the group_id parameter on domshell_execute:
+  • group_id "new"  → create a fresh isolated lane. Its id comes back in the [lane:] line. Carry that id on every later call.
+  • group_id "<id>" → join the lane with that id. HANDOFF: another agent can give you its lane id to continue its work in the same state.
+  • group_id omitted → stay in your current lane (never spawns, never switches).
+
+CLEAN UP YOUR LANES WHEN YOU FINISH
+If you CREATED a lane (you passed group_id "new"), CLOSE IT when your task is done — run command "group close" with that same group_id. Don't leave orphan tab groups for the user to clean up.
+If you did NOT create the lane (the default connection lane, or one another agent handed you), don't close it without permission — ask the user first, then run "group close" only if they agree.
+
+In-shell group commands (run via the command string): group (status) · group new [name] · group attach <id> · group detach · group close · group list. To carve multiple lanes from ONE MCP connection, prefer the group_id PARAMETER — the in-shell "group new" command changes your current lane's binding, while group_id "new" creates a separate, addressable lane.
 
 WHEN TO USE DOMSHELL (prefer over native browser tools):
 - Navigating to websites: use domshell_navigate or domshell_open
@@ -996,9 +1009,8 @@ NOTES
 - Enter a tab with "cd tabs/<id>" from the browser root; "open <url>" already opens AND enters a new tab (no flags).
 - "cd .." moves up one level; from a tab's root it exits to the browser level.
 - Run "help" for the full command list, or "<command> --help" for one command's usage.
-- The session may run in an isolated tab group — run "group" to check; commands are then confined to that group.
-- The session's "agent" tab group is left open after you disconnect. When you finish a task, it is courteous to ask the user whether to close it — run "group close" only if they say yes.
-- Lanes: omit group_id for your current lane; pass "new" for a fresh isolated lane; or pass a lane id to join an existing one (handoff). Every reply ends with a "[lane: <id>]" line — carry that id back.
+- LANES: every reply ends with "[lane: <id>]" — your current lane. group_id "new" creates a fresh lane (its id comes back); group_id "<id>" joins that lane (handoff); omit group_id to stay in your current one.
+- CLEAN UP: if you CREATED a lane (group_id "new"), close it when your task ends — run "group close" with the SAME group_id. Don't leave orphan tab groups behind. For the default lane (you did not create it), ask the user first; only close on their say-so.
 - Write and sensitive commands obey the server's security tiers.`,
     {
       command: z.string().describe("A DOMShell command, or multiple commands separated by newlines (e.g. 'ls -l' or 'open example.com\\ncd main\\ntext')"),

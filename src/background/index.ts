@@ -496,7 +496,7 @@ function wsConnect(): void {
       wsConnected = true;
       setWsStatus("connected");
       startKeepaliveAlarm();
-      console.log(`[DOMShell] WebSocket connected to MCP server — extension v${chrome.runtime.getManifest().version} (build sprint-02-b3-diag)`);
+      console.log(`[DOMShell] WebSocket connected to MCP server — extension v${chrome.runtime.getManifest().version}`);
 
       // Capability handshake (ADR-001 D11) — let a grouping-aware MCP server
       // know this extension supports tab groups.
@@ -504,7 +504,6 @@ function wsConnect(): void {
         type: "HELLO",
         version: chrome.runtime.getManifest().version,
         capabilities: ["grouping"],
-        build: "sprint-02-b3-diag",
       }));
 
       // Start heartbeat to keep MV3 service worker alive
@@ -534,7 +533,6 @@ function wsConnect(): void {
           // connect can restore stale "isolated" state (chrome.storage) — a
           // closed group, or a still-live leftover group from a prior session.
           // Reusing either would inherit stale tabs and the wrong group name.
-          console.log("[DOMShell] SESSION_START received — creating fresh 'agent' group");
           // The MCP bridge is its own session, separate from every side panel
           // (Sprint 03 — Multi-Session). Its group binding lives in that session.
           await runSerialized(async () => {
@@ -543,8 +541,7 @@ function wsConnect(): void {
             sessionGroupId = null;
             sessionGroupName = null;
             sessionGroupDisrupted = false;
-            const startResult = await groupNew(["agent"]);
-            console.log("[DOMShell] SESSION_START → groupNew:", startResult.replace(/\x1b\[[0-9;]*m/g, ""));
+            await groupNew(["agent"]);
             mcpSessionActive = true;
           });
           return;
@@ -833,7 +830,7 @@ chrome.runtime.onConnect.addListener((port) => {
 function formatWelcome(): string {
   return [
     "\x1b[36m\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557\x1b[0m",
-    "\x1b[36m\u2551\x1b[0m   \x1b[1;33mDOMShell v1.2.0\x1b[0m                                   \x1b[36m\u2551\x1b[0m",
+    "\x1b[36m\u2551\x1b[0m   \x1b[1;33mDOMShell v1.3.0\x1b[0m                                   \x1b[36m\u2551\x1b[0m",
     "\x1b[36m\u2551\x1b[0m   \x1b[37mThe browser is your filesystem.\x1b[0m                    \x1b[36m\u2551\x1b[0m",
     "\x1b[36m\u2551\x1b[0m   \x1b[90mhttps://github.com/apireno/DOMShell\x1b[0m                \x1b[36m\u2551\x1b[0m",
     "\x1b[36m\u2551\x1b[0m   \x1b[90mBuilt by Pireno | pireno.com\x1b[0m                       \x1b[36m\u2551\x1b[0m",

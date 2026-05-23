@@ -75,15 +75,21 @@ DOMShell uses **2× fewer API calls** to complete the same tasks. The filesystem
 
 Full experiment data: [experiments/claude_domshell_vs_cic](https://github.com/apireno/DOMShell/tree/main/experiments/claude_domshell_vs_cic)
 
-## 38 MCP Tools
+## MCP Interface
 
-**Read (always available):** `ls`, `cd`, `pwd`, `cat`, `find`, `grep`, `tree`, `text`, `read`, `tabs`, `here`, `refresh`, `diff`, `eval`, `functions`, `watch`, `for`, `script`, `each`, `extract_links`, `extract_table`
+**Default (recommended): the single `domshell_execute` tool.** Pass any DOMShell command as a string — `"ls"`, `"cd tabs/123"`, `"open https://example.com"` — or pass several newline-separated for a whole workflow in one call. One tool, one approval, the full command vocabulary in the tool description.
 
-**Write (--allow-write):** `click`, `focus`, `type`, `scroll`, `navigate`, `open`, `submit`, `back`, `forward`, `close`, `select`, `js`, `screenshot`, `wait`, `call`
+**Lanes & multi-agent.** Every reply ends with `[lane: <id>]`. Multiple MCP clients can connect simultaneously, each in its own isolated Chrome tab group. To carve sub-lanes within a single client (e.g. two Claude Desktop chats), pass `group_id: "new"` on the first call and carry the returned id thereafter. See [CHANGELOG.md](./CHANGELOG.md).
 
-**Sensitive (--allow-sensitive):** `whoami`
+### Granular mode — `--granular`
 
-**Fallback:** `execute` (run any command string)
+Start the server with `--granular` and the 38 per-command tools are exposed alongside `domshell_execute`. Use it when you want per-operation approval in the client UI.
+
+**Read tier (always available):** `ls`, `cd`, `pwd`, `cat`, `find`, `grep`, `tree`, `text`, `read`, `tabs`, `here`, `refresh`, `diff`, `eval`, `functions`, `watch`, `for`, `script`, `each`, `extract_links`, `extract_table`
+
+**Write tier (`--allow-write`):** `click`, `focus`, `type`, `scroll`, `navigate`, `open`, `submit`, `back`, `forward`, `close`, `select`, `js`, `screenshot`, `wait`, `call`
+
+**Sensitive tier (`--allow-sensitive`):** `whoami`
 
 ## CLI Flags
 
@@ -92,6 +98,7 @@ Full experiment data: [experiments/claude_domshell_vs_cic](https://github.com/ap
 | `--allow-write` | Enable write-tier tools (click, type, navigate, etc.) |
 | `--allow-sensitive` | Enable sensitive-tier tools (whoami) |
 | `--allow-all` | Enable all tiers |
+| `--granular` | Expose the 38 per-command tools alongside `domshell_execute` |
 | `--port N` | WebSocket port (default: 9876) |
 | `--mcp-port N` | HTTP MCP port (default: 3001) |
 | `--domains a.com,b.com` | Restrict to specific domains |

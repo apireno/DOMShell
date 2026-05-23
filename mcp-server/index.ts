@@ -198,7 +198,7 @@ wss.on("connection", (ws, req) => {
       } else if (msg.type === "HELLO") {
         // Capability handshake (ADR-001 D11).
         extensionGrouping = Array.isArray(msg.capabilities) && msg.capabilities.includes("grouping");
-        log(`Extension v${msg.version ?? "?"} (build: ${msg.build ?? "unknown"}) connected — grouping ${extensionGrouping ? "supported" : "NOT supported (legacy mode)"}`);
+        log(`Extension v${msg.version ?? "?"} connected — grouping ${extensionGrouping ? "supported" : "NOT supported (legacy mode)"}`);
         // Deliver SESSION_START once per session: if a session is active but
         // SESSION_START has not reached the extension yet (it connected after
         // the session began, or an earlier send dropped), send it now. NOT on

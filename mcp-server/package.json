@@ -1,7 +1,7 @@
 {
   "name": "@apireno/domshell",
-  "version": "1.1.2",
-  "description": "MCP server that turns your browser into a filesystem. 38 tools let AI agents ls, cd, grep, click, and type through Chrome via the DOMShell extension.",
+  "version": "2.0.0",
+  "description": "MCP server that gives AI agents Unix-style filesystem commands (ls, cd, grep, click, type) to drive Chrome. Single-tool interface, concurrent multi-agent isolation, per-lane tab groups.",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -11,7 +11,8 @@
   "files": [
     "dist/",
     "bin/",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build": "tsc",

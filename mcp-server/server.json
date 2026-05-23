@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.apireno/domshell",
   "title": "DOMShell",
-  "description": "Browse and control Chrome with Unix-style filesystem commands (ls, cd, grep, click, type). Single-tool MCP interface, concurrent multi-agent isolation, per-lane tab groups.",
+  "description": "Drive Chrome with filesystem commands (ls, cd, grep, click, type). One MCP tool, multi-agent.",
   "websiteUrl": "https://pireno.com/domshell",
   "repository": {
     "url": "https://github.com/apireno/DOMShell",

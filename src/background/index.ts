@@ -255,6 +255,17 @@ async function getCachedInnerText(backendDOMNodeId: number): Promise<string> {
   }
 }
 
+/** Drop the cached AX tree so the next `cdpSwitchToTab` does a full fresh fetch.
+ *  Use after any operation that changes the page content of the current tab
+ *  (navigate / back / forward) — same `tabId`, new page. The `cdpSwitchToTab`
+ *  fast path keys on `(nodeMapTabId, nodeMap.size)`; without invalidation it
+ *  would return the pre-navigation tree (issue #36). */
+function invalidateTreeCache(): void {
+  nodeMap = new Map();
+  nodeMapTabId = null;
+  textContentCache = new Map();
+}
+
 // Snapshot for diff: saved before write/navigate commands
 interface SnapshotEntry { role: string; name: string; value?: string; childCount: number }
 let previousSnapshot: Map<string, SnapshotEntry> | null = null;
@@ -387,7 +398,11 @@ function getDomSegments(): string[] {
   return state.path.slice(start);
 }
 
-/** Internal: attach CDP to a tab and build its AX tree. */
+/** Internal: attach CDP to a tab and build its AX tree.
+ *  Fast path: assumes the cached tree is still valid for the same `tabId`. Callers
+ *  that change the page content of the current tab (navigate / back / forward)
+ *  MUST `invalidateTreeCache()` first — otherwise this returns the stale snapshot
+ *  AND skips re-attaching CDP, leaving subsequent calls with a dangling target. (#36) */
 async function cdpSwitchToTab(tabId: number): Promise<{ tab: chrome.tabs.Tab; nodeCount: number; iframeCount: number }> {
   if (nodeMapTabId === tabId && nodeMap.size > 0) {
     // Already attached — just return info.
@@ -3833,6 +3848,10 @@ async function handleBack(): Promise<string> {
     }, 10000);
   });
 
+  // Same tabId now points at a different history entry — invalidate the
+  // cached tree so cdpSwitchToTab's fast path can't return the stale snapshot. (#36)
+  invalidateTreeCache();
+
   // Re-fetch the AX tree
   const { nodeCount } = await cdpSwitchToTab(tabId);
 
@@ -3874,6 +3893,10 @@ async function handleForward(): Promise<string> {
       resolve();
     }, 10000);
   });
+
+  // Same tabId now points at a different history entry — invalidate the
+  // cached tree so cdpSwitchToTab's fast path can't return the stale snapshot. (#36)
+  invalidateTreeCache();
 
   const { nodeCount } = await cdpSwitchToTab(tabId);
 
@@ -4855,6 +4878,10 @@ async function handleNavigate(args: string[]): Promise<string> {
   // Detach first (navigation will invalidate CDP state)
   await cdp.detach();
   state.activeTabId = null;
+
+  // Same tabId is about to point at a new page — drop the cached tree so the
+  // cdpSwitchToTab fast path can't return the pre-navigation snapshot. (#36)
+  invalidateTreeCache();
 
   // Navigate
   await chrome.tabs.update(tabId, { url });

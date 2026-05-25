@@ -3,9 +3,9 @@
 Notable changes to DOMShell — the Chrome extension and the `@apireno/domshell` MCP server.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The two artifacts version independently.
 
-## MCP server `2.0.0` · Chrome extension `1.3.0` — 2026-05-22
+## MCP server `2.0.0` (2026-05-22) · Chrome extension `1.3.0` (2026-05-25)
 
-The first release since November 2025, bundling Sprints 02 – 04. Big interface change on the MCP server (the major bump) and a substantial kernel refactor on the extension.
+The first release since November 2025, bundling Sprints 02 – 04. Big interface change on the MCP server (the major bump) and a substantial kernel refactor on the extension. The extension's Chrome Web Store package picked up one additional fix (#36) before approval — same `1.3.0` version, no user-visible "patch" release.
 
 ### Added — MCP server (`@apireno/domshell`)
 
@@ -29,6 +29,7 @@ The first release since November 2025, bundling Sprints 02 – 04. Big interface
 
 ### Fixed
 
+- `navigate` (and `back` / `forward`) no longer return the previous page's AX tree after a same-tab page change. `cdpSwitchToTab`'s fast path was content-preserving but nothing invalidated the cache, so the post-navigation `nodeMap` was the pre-navigation snapshot — node count frozen across pages, stale element IDs, and `wait` failing with a misleading "Not attached to any tab" because the fast path skipped re-attaching CDP. Fixed by an `invalidateTreeCache()` helper called from the three same-tab navigation handlers. (#36)
 - A failed `cd` into a `chrome://` page no longer leaves the shell wedged on that tab.
 - Targeting a tab Chrome forbids debugging (`chrome://`, `devtools://`, `view-source:`, …) returns a clear, actionable error instead of a raw CDP message.
 - Two side panels can no longer corrupt each other's cursor (command serialization + per-session state).

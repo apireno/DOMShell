@@ -194,8 +194,26 @@ export class CDPClient {
     // If the helper attached `text`, the down event is a text-producing keyDown;
     // otherwise it's a rawKeyDown (special key, no text).
     const downType = "text" in params ? "keyDown" : "rawKeyDown";
-    await this.send("Input.dispatchKeyEvent", { type: downType, ...params });
-    await this.send("Input.dispatchKeyEvent", { type: "keyUp", ...params });
+
+    // Diagnostic: while we run down the "key reports ✓ but no event reaches
+    // the page" issue, log each leg of the dispatch into the service worker
+    // console so we can tell whether the CDP call ran, what it returned, and
+    // whether the keyUp fired. Strip after the symptom is resolved. (#40)
+    console.log("[key.dispatch] target tab:", this.attachedTabId, "down:", downType, "params:", params);
+    try {
+      const downResp = await this.send("Input.dispatchKeyEvent", { type: downType, ...params });
+      console.log("[key.dispatch] down response:", downResp);
+    } catch (err: any) {
+      console.error("[key.dispatch] down threw:", err?.message ?? err);
+      throw err;
+    }
+    try {
+      const upResp = await this.send("Input.dispatchKeyEvent", { type: "keyUp", ...params });
+      console.log("[key.dispatch] up response:", upResp);
+    } catch (err: any) {
+      console.error("[key.dispatch] up threw:", err?.message ?? err);
+      throw err;
+    }
   }
 
   /**

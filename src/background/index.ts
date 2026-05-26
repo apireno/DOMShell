@@ -845,7 +845,7 @@ chrome.runtime.onConnect.addListener((port) => {
 function formatWelcome(): string {
   return [
     "\x1b[36m\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557\x1b[0m",
-    "\x1b[36m\u2551\x1b[0m   \x1b[1;33mDOMShell v1.3.0\x1b[0m                                   \x1b[36m\u2551\x1b[0m",
+    "\x1b[36m\u2551\x1b[0m   \x1b[1;33mDOMShell v1.3.1\x1b[0m                                   \x1b[36m\u2551\x1b[0m",
     "\x1b[36m\u2551\x1b[0m   \x1b[37mThe browser is your filesystem.\x1b[0m                    \x1b[36m\u2551\x1b[0m",
     "\x1b[36m\u2551\x1b[0m   \x1b[90mhttps://github.com/apireno/DOMShell\x1b[0m                \x1b[36m\u2551\x1b[0m",
     "\x1b[36m\u2551\x1b[0m   \x1b[90mBuilt by Pireno | pireno.com\x1b[0m                       \x1b[36m\u2551\x1b[0m",
@@ -4151,7 +4151,9 @@ async function handleKey(args: string[]): Promise<string> {
     modifiers |= bit;
   }
 
+  console.log("[handleKey] entering dispatch for", keyName, "modifiers=", modifiers, "activeTab=", state.activeTabId);
   await cdp.dispatchKey(keyName, modifiers);
+  console.log("[handleKey] dispatch returned");
   treeStale = true;
   const modNote = modifiers ? ` (modifiers: ${modifiersArg})` : "";
   return `\x1b[32m\u2713 Sent key: ${keyName}${modNote}\x1b[0m\r\n\x1b[90m(tree will auto-refresh on next command)\x1b[0m`;

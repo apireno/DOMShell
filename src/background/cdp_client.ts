@@ -189,27 +189,75 @@ export class CDPClient {
    * `key` is the DOM key value ("Enter", "Escape", "Tab", "ArrowDown", "a", …).
    * `modifiers` is a CDP modifier bitmask: Alt=1, Ctrl=2, Meta=4, Shift=8.
    */
-  async dispatchKey(key: string, modifiers: number = 0): Promise<void> {
-    // Bring the tab to the front of its window before dispatching. Chrome's
-    // chrome.debugger.sendCommand path silently drops Input.dispatchKeyEvent
-    // when the target tab isn't the active tab in a focused window — the CDP
-    // call returns success ({}), but the renderer never fires keydown. Mouse
-    // events are exempt because they carry explicit coordinates and Chrome
-    // hit-tests by position; keys have no coordinates and depend on focus.
-    // No stealth-focus API exists; this is the canonical fix. Page.bringToFront
-    // is a no-op on chrome:// pages (where keys wouldn't work anyway) — swallow
-    // any error so a key dispatch failure surfaces visibly rather than being
-    // pre-empted by the bringToFront. (#40)
-    try {
-      await this.send("Page.bringToFront");
-    } catch { /* tab is undebuggable for bringToFront; let the dispatch error speak */ }
-
+  /** Result of a key dispatch — `trusted: true` means the CDP path fired
+   *  (event.isTrusted will be true on the page); `false` means the JS
+   *  synthetic fallback was used (no focus shift, but isTrusted will be
+   *  false on the page). */
+  async dispatchKey(key: string, modifiers: number = 0): Promise<{ trusted: boolean }> {
     const params = keyEventParams(key, modifiers);
-    // If the helper attached `text`, the down event is a text-producing keyDown;
-    // otherwise it's a rawKeyDown (special key, no text).
-    const downType = "text" in params ? "keyDown" : "rawKeyDown";
-    await this.send("Input.dispatchKeyEvent", { type: downType, ...params });
-    await this.send("Input.dispatchKeyEvent", { type: "keyUp", ...params });
+
+    // Chrome's chrome.debugger.sendCommand path silently drops
+    // Input.dispatchKeyEvent when the target tab isn't the active tab in its
+    // window — the CDP call returns success ({}) but the renderer never fires
+    // keydown. Two paths from here:
+    //
+    //   (a) The target tab IS already the active tab. The CDP trusted path
+    //       will fire normally. Use it — agents that need event.isTrusted
+    //       (React SPAs that guard activation) get what they need.
+    //
+    //   (b) The target tab is NOT active. We could call Page.bringToFront,
+    //       but that visibly steals focus — disruptive when the agent runs
+    //       from another window (Claude Desktop, the side panel). Instead,
+    //       fall back to a JS-synthesized KeyboardEvent dispatched against
+    //       document.activeElement. Untrusted, but works without shifting
+    //       focus and triggers any handler that doesn't check isTrusted
+    //       (which is most of them).
+    //
+    // Agents that hit an isTrusted-checking SPA simply make the target tab
+    // active first (click on it, or cd %here% to the focused tab) and re-run
+    // `key` — path (a) takes over automatically. (#40)
+    const isActive = await this.targetTabIsActive();
+
+    if (isActive) {
+      const downType = "text" in params ? "keyDown" : "rawKeyDown";
+      await this.send("Input.dispatchKeyEvent", { type: downType, ...params });
+      await this.send("Input.dispatchKeyEvent", { type: "keyUp", ...params });
+      return { trusted: true };
+    }
+
+    // Synthetic fallback — dispatch KeyboardEvents directly on activeElement.
+    const eventOpts = JSON.stringify({
+      key: params.key,
+      code: params.code ?? "",
+      keyCode: params.windowsVirtualKeyCode ?? 0,
+      which: params.windowsVirtualKeyCode ?? 0,
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+    });
+    await this.send("Runtime.evaluate", {
+      expression: `(() => {
+        const target = document.activeElement || document.body;
+        const opts = ${eventOpts};
+        target.dispatchEvent(new KeyboardEvent("keydown", opts));
+        target.dispatchEvent(new KeyboardEvent("keyup", opts));
+      })()`,
+      returnByValue: true,
+    });
+    return { trusted: false };
+  }
+
+  /** Whether the currently-attached tab is the active (visible) tab in its
+   *  window. Used to decide between the trusted CDP key-dispatch path and the
+   *  untrusted JS synthetic fallback. (#40) */
+  private async targetTabIsActive(): Promise<boolean> {
+    if (this.attachedTabId === null) return false;
+    return new Promise((resolve) => {
+      chrome.tabs.get(this.attachedTabId!, (tab) => {
+        if (chrome.runtime.lastError || !tab) return resolve(false);
+        resolve(tab.active === true);
+      });
+    });
   }
 
   /**

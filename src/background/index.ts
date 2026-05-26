@@ -1105,14 +1105,20 @@ const COMMAND_HELP: Record<string, string> = {
     "",
     "\x1b[33mUsage:\x1b[0m key <KeyName> [--modifiers ctrl,shift,alt,meta]",
     "",
-    "Sends a real CDP-level keyDown+keyUp pair (event.isTrusted === true) to",
-    "whatever element currently has DOM focus. Use after `focus <name>` for",
-    "SPAs that listen for Enter/Escape/arrow keys rather than click.",
+    "Sends a keyDown+keyUp pair to the element with DOM focus. Pairs with",
+    "`focus <name>` for SPAs that listen for Enter/Escape/arrow keys.",
     "",
-    "\x1b[33mNote:\x1b[0m the target tab is brought to the front of its window before",
-    "dispatch — Chrome silently drops key events to background tabs. Clicks are",
-    "unaffected by this. A burst of keys in the same tab only costs the focus",
-    "shift once.",
+    "\x1b[33mTrust:\x1b[0m two paths, picked automatically based on tab state:",
+    "  - Target tab is the active tab in its window → trusted CDP dispatch",
+    "    (event.isTrusted === true). React-driven SPAs that guard activation",
+    "    with isTrusted checks get a real key.",
+    "  - Target tab is in the background → synthetic JS dispatch on",
+    "    document.activeElement (event.isTrusted === false, but no focus shift).",
+    "    Handlers that don't check isTrusted (the majority) still fire.",
+    "",
+    "If you need trusted and got synthetic: make the target tab the active tab",
+    "in its window (click on it in the browser, or `cd %here%` after focusing",
+    "it) and re-run key. The reply tells you which path was used.",
     "",
     "\x1b[33mCommon keys:\x1b[0m",
     "  Enter Escape Tab Backspace Delete Space",
@@ -4156,10 +4162,13 @@ async function handleKey(args: string[]): Promise<string> {
     modifiers |= bit;
   }
 
-  await cdp.dispatchKey(keyName, modifiers);
+  const { trusted } = await cdp.dispatchKey(keyName, modifiers);
   treeStale = true;
   const modNote = modifiers ? ` (modifiers: ${modifiersArg})` : "";
-  return `\x1b[32m\u2713 Sent key: ${keyName}${modNote}\x1b[0m\r\n\x1b[90m(tree will auto-refresh on next command)\x1b[0m`;
+  const pathNote = trusted
+    ? "\x1b[90m(trusted CDP dispatch \u2014 event.isTrusted === true)\x1b[0m"
+    : "\x1b[90m(synthetic \u2014 event.isTrusted === false; make the target tab active to upgrade to trusted)\x1b[0m";
+  return `\x1b[32m\u2713 Sent key: ${keyName}${modNote}\x1b[0m\r\n${pathNote}\r\n\x1b[90m(tree will auto-refresh on next command)\x1b[0m`;
 }
 
 // ---- submit (atomic form interaction) ----

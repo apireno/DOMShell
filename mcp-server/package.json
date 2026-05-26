@@ -5,8 +5,8 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "domshell": "./bin/domshell.js",
-    "domshell-proxy": "./bin/domshell-proxy.js"
+    "domshell": "bin/domshell.js",
+    "domshell-proxy": "bin/domshell-proxy.js"
   },
   "files": [
     "dist/",
@@ -34,7 +34,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/apireno/DOMShell"
+    "url": "git+https://github.com/apireno/DOMShell.git"
   },
   "homepage": "https://pireno.com/domshell",
   "mcpName": "io.github.apireno/domshell",

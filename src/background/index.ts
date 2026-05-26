@@ -1101,24 +1101,28 @@ const COMMAND_HELP: Record<string, string> = {
   ].join("\r\n"),
 
   key: [
-    "\x1b[1;36mkey\x1b[0m — Dispatch a trusted keyboard event to the focused element",
+    "\x1b[1;36mkey\x1b[0m — Dispatch a keyboard event to the focused element",
     "",
-    "\x1b[33mUsage:\x1b[0m key <KeyName> [--modifiers ctrl,shift,alt,meta]",
+    "\x1b[33mUsage:\x1b[0m key <KeyName> [--modifiers ctrl,shift,alt,meta] [--activate]",
     "",
     "Sends a keyDown+keyUp pair to the element with DOM focus. Pairs with",
     "`focus <name>` for SPAs that listen for Enter/Escape/arrow keys.",
     "",
-    "\x1b[33mTrust:\x1b[0m two paths, picked automatically based on tab state:",
-    "  - Target tab is the active tab in its window → trusted CDP dispatch",
-    "    (event.isTrusted === true). React-driven SPAs that guard activation",
-    "    with isTrusted checks get a real key.",
+    "\x1b[33mTrust:\x1b[0m two paths, picked automatically based on tab state.",
+    "  - Target tab is already the active tab in its window → trusted CDP",
+    "    dispatch (event.isTrusted === true). For SPAs that gate activation",
+    "    on isTrusted (LinkedIn, etc.).",
     "  - Target tab is in the background → synthetic JS dispatch on",
-    "    document.activeElement (event.isTrusted === false, but no focus shift).",
+    "    document.activeElement (event.isTrusted === false, no focus shift).",
     "    Handlers that don't check isTrusted (the majority) still fire.",
     "",
-    "If you need trusted and got synthetic: make the target tab the active tab",
-    "in its window (click on it in the browser, or `cd %here%` after focusing",
-    "it) and re-run key. The reply tells you which path was used.",
+    "\x1b[33m--activate\x1b[0m — explicit opt-in for trusted dispatch when the target tab",
+    "  is in the background. Briefly makes it the active tab, dispatches the",
+    "  key, then restores the previously-active tab. Visible flicker; required",
+    "  for isTrusted-checking SPAs when the agent can't ask the human to click",
+    "  on the tab first.",
+    "",
+    "The reply tells you which path was used.",
     "",
     "\x1b[33mCommon keys:\x1b[0m",
     "  Enter Escape Tab Backspace Delete Space",
@@ -4150,7 +4154,7 @@ async function handleKey(args: string[]): Promise<string> {
 
   const pa = parseArgs(args);
   if (pa.positional.length === 0) {
-    return "\x1b[31mUsage: key <KeyName> [--modifiers ctrl,shift,\u2026] (see key --help)\x1b[0m";
+    return "\x1b[31mUsage: key <KeyName> [--modifiers ctrl,shift,\u2026] [--activate] (see key --help)\x1b[0m";
   }
 
   const keyName = pa.positional[0];
@@ -4162,13 +4166,53 @@ async function handleKey(args: string[]): Promise<string> {
     modifiers |= bit;
   }
 
+  // (#40) --activate: temporarily make the target tab the active tab in its
+  // window so the trusted CDP key path can fire, then restore the previously-
+  // active tab. The flicker is brief (a single tab-update round trip on either
+  // side); to the human user the tab visibly blinks. Required for SPAs that
+  // gate activation on event.isTrusted (LinkedIn, etc.).
+  const activate = pa.flags.has("--activate");
+  let restoreTabId: number | null = null;
+  let activationFailed: string | null = null;
+  if (activate && state.activeTabId !== null) {
+    try {
+      const tab = await chrome.tabs.get(state.activeTabId);
+      const windowId = tab.windowId;
+      // Capture the tab currently active in this window so we can put it back.
+      const activeInWindow = await chrome.tabs.query({ active: true, windowId });
+      if (activeInWindow[0]?.id && activeInWindow[0].id !== state.activeTabId) {
+        restoreTabId = activeInWindow[0].id;
+      }
+      if (!tab.active) {
+        await chrome.tabs.update(state.activeTabId, { active: true });
+      }
+    } catch (err: any) {
+      activationFailed = err?.message ?? String(err);
+    }
+  }
+
   const { trusted } = await cdp.dispatchKey(keyName, modifiers);
+
+  if (restoreTabId !== null) {
+    try {
+      await chrome.tabs.update(restoreTabId, { active: true });
+    } catch {
+      // Restore best-effort \u2014 if the previously-active tab is gone, leave the
+      // target tab visible.
+    }
+  }
+
   treeStale = true;
   const modNote = modifiers ? ` (modifiers: ${modifiersArg})` : "";
   const pathNote = trusted
     ? "\x1b[90m(trusted CDP dispatch \u2014 event.isTrusted === true)\x1b[0m"
-    : "\x1b[90m(synthetic \u2014 event.isTrusted === false; make the target tab active to upgrade to trusted)\x1b[0m";
-  return `\x1b[32m\u2713 Sent key: ${keyName}${modNote}\x1b[0m\r\n${pathNote}\r\n\x1b[90m(tree will auto-refresh on next command)\x1b[0m`;
+    : "\x1b[90m(synthetic \u2014 event.isTrusted === false; pass --activate, or make the target tab active manually, to upgrade to trusted)\x1b[0m";
+  const activateNote = activationFailed
+    ? `\r\n\x1b[33m(--activate failed: ${activationFailed} \u2014 dispatched without)\x1b[0m`
+    : restoreTabId !== null
+    ? "\r\n\x1b[90m(--activate: focus restored to previously-active tab)\x1b[0m"
+    : "";
+  return `\x1b[32m\u2713 Sent key: ${keyName}${modNote}\x1b[0m\r\n${pathNote}${activateNote}\r\n\x1b[90m(tree will auto-refresh on next command)\x1b[0m`;
 }
 
 // ---- submit (atomic form interaction) ----

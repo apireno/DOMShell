@@ -1058,17 +1058,20 @@ const COMMAND_HELP: Record<string, string> = {
   ].join("\r\n"),
 
   scroll: [
-    "\x1b[1;36mscroll\x1b[0m \u2014 Scroll the page or scroll an element into view",
+    "\x1b[1;36mscroll\x1b[0m \u2014 Scroll the page or an inner container, or bring an element into view",
     "",
-    "\x1b[33mUsage:\x1b[0m scroll [down|up] [N] | scroll <element_name>",
+    "\x1b[33mUsage:\x1b[0m scroll [down|up] [N] [--window] | scroll <element_name>",
     "",
     "\x1b[33mModes:\x1b[0m",
-    "  \x1b[32mscroll down\x1b[0m             Scroll page down by 1 viewport height",
-    "  \x1b[32mscroll up\x1b[0m               Scroll page up by 1 viewport height",
-    "  \x1b[32mscroll down 3\x1b[0m           Scroll page down by 3 viewport heights",
-    "  \x1b[32mscroll element_name\x1b[0m     Scroll element into center of viewport",
+    "  \x1b[32mscroll down\x1b[0m             Scroll by 1 viewport height (inner container if cursor is inside one)",
+    "  \x1b[32mscroll up\x1b[0m               Scroll up by 1 viewport height",
+    "  \x1b[32mscroll down 3\x1b[0m           Scroll down by 3 viewport heights",
+    "  \x1b[32mscroll down --window\x1b[0m    Force document scroll (skip the inner-container walk-up)",
+    "  \x1b[32mscroll element_name\x1b[0m     Scroll a specific element into center of viewport",
     "",
-    "Returns current scroll position as percentage.",
+    "By default, walks up from the cursor to find the nearest scrollable ancestor",
+    "(virtualized lists, side panes, \u2026) and scrolls IT. Falls back to window if none.",
+    "Output marks `(inner container)` when an inner element was scrolled.",
     "",
     "\x1b[33mExamples:\x1b[0m",
     "  scroll down                    See more content below the fold",
@@ -1084,6 +1087,7 @@ const COMMAND_HELP: Record<string, string> = {
     "Evaluates arbitrary JavaScript in the current tab and returns the result.",
     "Supports async/await (Promises are automatically awaited).",
     "Results are JSON-serialized. Large results are truncated at 10000 chars.",
+    "Times out after 30s if the expression returns a non-resolving Promise.",
     "",
     "\x1b[33mExamples:\x1b[0m",
     "  js document.title",
@@ -3066,15 +3070,20 @@ async function handleClick(args: string[]): Promise<string> {
     return `\x1b[31mclick: ${targetName}: No DOM node backing (AX-only node)\x1b[0m`;
   }
 
+  // Prefer trusted clicks (CDP Input.dispatchMouseEvent) over synthetic
+  // Element.prototype.click() \u2014 React-driven SPAs (LinkedIn, Twitter, Notion, \u2026)
+  // check event.isTrusted and silently ignore synthetic clicks. CDP dispatch
+  // produces trusted events. Fall back to the element-method click only if the
+  // node has no usable bounding box (hidden, zero-size, off-layout). (#37)
   try {
-    await cdp.clickByBackendNodeId(match.backendDOMNodeId);
+    await cdp.clickByCoordinates(match.backendDOMNodeId);
     treeStale = true;
     return `\x1b[32m\u2713 Clicked: ${match.name} (${match.role})\x1b[0m\r\n\x1b[90m(tree will auto-refresh on next command)\x1b[0m`;
   } catch {
     try {
-      await cdp.clickByCoordinates(match.backendDOMNodeId);
+      await cdp.clickByBackendNodeId(match.backendDOMNodeId);
       treeStale = true;
-      return `\x1b[32m\u2713 Clicked (coords): ${match.name} (${match.role})\x1b[0m\r\n\x1b[90m(tree will auto-refresh on next command)\x1b[0m`;
+      return `\x1b[32m\u2713 Clicked (synthetic fallback): ${match.name} (${match.role})\x1b[0m\r\n\x1b[90m(tree will auto-refresh on next command)\x1b[0m`;
     } catch (err: any) {
       return `\x1b[31mclick failed: ${err.message}\x1b[0m`;
     }
@@ -3127,13 +3136,27 @@ async function handleScroll(args: string[]): Promise<string> {
   }
 
   // Mode 2: scroll down [N] / scroll up [N]
+  // Default: walk up from the cursor to find the nearest scrollable ancestor
+  // and scroll IT (handles virtualized lists \u2014 #35). Pass --window to force
+  // document scroll for sites where the body itself is the scroll container
+  // and the cursor lives inside a non-scrolling pane.
   const direction = (pa.positional[0] || "down") as "up" | "down";
   const amount = pa.positional[1] ? parseFloat(pa.positional[1]) : 1;
-  const info = await cdp.scrollPage(direction, amount);
+  const forceWindow = pa.flags.has("--window");
+
+  let fromBackendId: number | undefined;
+  if (!forceWindow) {
+    const currentId = getCurrentNodeId();
+    const cursorNode = nodeMap.get(currentId);
+    if (cursorNode?.backendDOMNodeId) fromBackendId = cursorNode.backendDOMNodeId;
+  }
+
+  const info = await cdp.scrollPage(direction, amount, fromBackendId);
   treeStale = true;
   const maxScroll = info.scrollHeight - info.viewportHeight;
   const pct = maxScroll > 0 ? Math.round((info.scrollY / maxScroll) * 100) : 0;
-  return `\x1b[32m\u2713 Scrolled ${direction} ${amount} viewport(s)\x1b[0m\r\n\x1b[90mPosition: ${info.scrollY}/${info.scrollHeight}px (${pct}%)\x1b[0m`;
+  const containerNote = info.container === "inner" ? " (inner container)" : "";
+  return `\x1b[32m\u2713 Scrolled ${direction} ${amount} viewport(s)${containerNote}\x1b[0m\r\n\x1b[90mPosition: ${info.scrollY}/${info.scrollHeight}px (${pct}%)\x1b[0m`;
 }
 
 // ---- js ----

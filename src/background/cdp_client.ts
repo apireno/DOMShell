@@ -468,19 +468,73 @@ export class CDPClient {
   }
 
   /**
-   * Scroll the page by viewport height increments.
+   * Scroll the page (or an inner container) by viewport-height increments.
+   *
+   * If `fromBackendDOMNodeId` is provided, walks up the DOM tree from that node
+   * looking for the nearest scrollable ancestor (overflow-y: auto/scroll AND
+   * scrollHeight > clientHeight) and scrolls IT. This handles virtualized
+   * lists (LinkedIn, Twitter, react-window, …) where the document itself isn't
+   * the scroll container — without the walk-up, `scroll down` would scroll
+   * `window` to no effect and never reveal off-screen rows. (#35)
+   *
+   * Falls back to `window` if no scrollable ancestor exists or
+   * `fromBackendDOMNodeId` is not provided.
    */
-  async scrollPage(direction: "up" | "down", viewports: number = 1): Promise<{ scrollY: number; scrollHeight: number; viewportHeight: number }> {
-    const sign = direction === "down" ? "" : "-";
+  async scrollPage(
+    direction: "up" | "down",
+    viewports: number = 1,
+    fromBackendDOMNodeId?: number
+  ): Promise<{ scrollY: number; scrollHeight: number; viewportHeight: number; container: "window" | "inner" }> {
+    const sign = direction === "down" ? 1 : -1;
+
+    // The page-scope function we'll invoke. Same logic whether we have a
+    // cursor node (then `this` is the cursor) or not (then `this` is the
+    // window, which the walk-up immediately bails out of into the window
+    // branch).
+    const fnSrc = `function(viewports, sign) {
+      function findScrollable(start) {
+        var el = start;
+        while (el && el.nodeType === 1 && el !== document.body && el !== document.documentElement) {
+          var style = window.getComputedStyle(el);
+          var oy = style.overflowY;
+          if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight + 1) return el;
+          el = el.parentElement;
+        }
+        return null;
+      }
+      var container = (this && this.nodeType === 1) ? findScrollable(this) : null;
+      if (container) {
+        var vh = container.clientHeight;
+        container.scrollBy({ top: sign * vh * viewports, behavior: 'instant' });
+        return { scrollY: Math.round(container.scrollTop), scrollHeight: container.scrollHeight, viewportHeight: vh, container: 'inner' };
+      }
+      var wvh = window.innerHeight;
+      window.scrollBy({ top: sign * wvh * viewports, behavior: 'instant' });
+      return { scrollY: Math.round(window.scrollY), scrollHeight: document.documentElement.scrollHeight, viewportHeight: wvh, container: 'window' };
+    }`;
+
+    if (fromBackendDOMNodeId !== undefined) {
+      const { object } = await this.send<{ object: { objectId: string } }>(
+        "DOM.resolveNode",
+        { backendNodeId: fromBackendDOMNodeId }
+      );
+      const { result } = await this.send<{ result: { value: any } }>(
+        "Runtime.callFunctionOn",
+        {
+          objectId: object.objectId,
+          functionDeclaration: fnSrc,
+          arguments: [{ value: viewports }, { value: sign }],
+          returnByValue: true,
+        }
+      );
+      return result.value;
+    }
+
+    // No cursor — scroll window directly.
     const { result } = await this.send<{ result: { value: any } }>(
       "Runtime.evaluate",
       {
-        expression: `(() => {
-          const vh = window.innerHeight;
-          const dy = ${sign}(vh * ${viewports});
-          window.scrollBy({ top: dy, behavior: 'instant' });
-          return { scrollY: Math.round(window.scrollY), scrollHeight: document.documentElement.scrollHeight, viewportHeight: vh };
-        })()`,
+        expression: `(${fnSrc}).call(window, ${viewports}, ${sign})`,
         returnByValue: true,
       }
     );
@@ -505,12 +559,19 @@ export class CDPClient {
   /**
    * Evaluate arbitrary JavaScript in the tab context.
    * Supports async/await (Promises are automatically awaited).
+   *
+   * Times out after `timeoutMs` (default 30s) to prevent a non-resolving
+   * Promise from hanging the entire MCP call — Runtime.evaluate with
+   * awaitPromise: true has no built-in cancellation, so the whole CDP
+   * connection stalls until the parent client kills the request. (#38)
    */
-  async evaluateJs(code: string): Promise<{ value: any; type: string }> {
-    const { result, exceptionDetails } = await this.send<{
+  async evaluateJs(code: string, timeoutMs: number = 30000): Promise<{ value: any; type: string }> {
+    type EvalResp = {
       result: { value: any; type: string; description?: string };
       exceptionDetails?: { exception?: { description?: string }; text?: string };
-    }>(
+    };
+
+    const evalPromise = this.send<EvalResp>(
       "Runtime.evaluate",
       {
         expression: code,
@@ -518,11 +579,30 @@ export class CDPClient {
         awaitPromise: true,
       }
     );
-    if (exceptionDetails) {
-      const msg = exceptionDetails.exception?.description || exceptionDetails.text || "Unknown error";
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        // Best-effort: ask the runtime to abandon whatever it's running so the
+        // page isn't left in a stuck evaluator state. Swallow the result —
+        // some CDP targets don't expose terminateExecution at all.
+        this.send("Runtime.terminateExecution", {}).catch(() => {});
+        reject(new Error(`js evaluation timed out after ${timeoutMs}ms — the expression returned a Promise that never resolved (or hit a page-level deadlock). Try wrapping it in Promise.race with your own timeout, or use 'eval' for a sync expression.`));
+      }, timeoutMs);
+    });
+
+    let resp: EvalResp;
+    try {
+      resp = await Promise.race([evalPromise, timeoutPromise]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+
+    if (resp.exceptionDetails) {
+      const msg = resp.exceptionDetails.exception?.description || resp.exceptionDetails.text || "Unknown error";
       throw new Error(msg);
     }
-    return { value: result.value, type: result.type };
+    return { value: resp.result.value, type: resp.result.type };
   }
 
   /**

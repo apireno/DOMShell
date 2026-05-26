@@ -82,29 +82,56 @@ function isCommandAllowed(command: string): { allowed: boolean; reason?: string 
 
 // ---- User Confirmation via /dev/tty ----
 
+// Whether the parent has an interactive terminal we can prompt on. Cached at
+// module load — a GUI MCP client (Claude Desktop, Cursor, …) launches us with
+// stdin/stdout wired to its MCP transport and stderr piped to its own log,
+// none of them TTYs. Probing /dev/tty in that case can succeed only to deadlock
+// later on the synchronous readSync, freezing the entire event loop. (#39)
+const HAS_INTERACTIVE_TTY: boolean = !!(
+  process.stderr && (process.stderr as any).isTTY
+);
+
 function confirmAction(description: string): Promise<boolean> {
   if (NO_CONFIRM) return Promise.resolve(true);
 
+  if (!HAS_INTERACTIVE_TTY) {
+    // No human at the keyboard. Don't pretend; don't try /dev/tty (it can hang
+    // the whole process on a synchronous readSync). Deny clearly so the agent
+    // gets an actionable error pointing at the right CLI flag. (#39)
+    log(`WARNING: Cannot confirm '${description}' — no interactive terminal attached.`);
+    log("Restart the MCP server with --no-confirm to auto-approve write actions in non-interactive (GUI-spawned) mode.");
+    return Promise.resolve(false);
+  }
+
   return new Promise((resolve) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const fd = openSync("/dev/tty", "r+");
       const prompt = `\n[DOMShell] Claude wants to: ${description}\nAllow? (y/n): `;
       writeSync(fd, prompt);
 
+      // Note: readSync is synchronous and blocks the event loop until input is
+      // received. The setTimeout below cannot fire while we're parked here. The
+      // HAS_INTERACTIVE_TTY guard above is what actually prevents the hang in
+      // non-interactive contexts. (#39)
       const buf = Buffer.alloc(10);
       const bytesRead = readSync(fd, buf, 0, 10, null);
       const answer = buf.slice(0, bytesRead).toString().trim().toLowerCase();
 
+      if (timer !== undefined) clearTimeout(timer);
       resolve(answer === "y" || answer === "yes");
     } catch {
-      // /dev/tty not available (e.g., Windows, or running without a terminal)
+      // /dev/tty open failed even though isTTY was true — fall back to deny.
+      if (timer !== undefined) clearTimeout(timer);
       log("WARNING: Cannot open /dev/tty for confirmation. Denying write action.");
       log("Use --no-confirm to skip confirmation prompts.");
       resolve(false);
     }
 
-    // Timeout after 60 seconds
-    setTimeout(() => resolve(false), 60000);
+    // Best-effort backstop in case openSync/readSync gets into a weird state
+    // we didn't anticipate. (See note above — this timeout cannot save us from
+    // a blocking readSync; HAS_INTERACTIVE_TTY does that work.)
+    timer = setTimeout(() => resolve(false), 60000);
   });
 }
 

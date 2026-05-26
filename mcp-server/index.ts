@@ -67,6 +67,25 @@ const NAVIGATE_COMMANDS = new Set(["navigate", "goto", "open", "back", "forward"
 const WRITE_COMMANDS = new Set(["click", "focus", "type", "key", "scroll", "js", "select", "close", "call"]);
 const SENSITIVE_COMMANDS = new Set(["whoami"]);
 
+// ---- MCP Tool Annotations ----
+//
+// Per-tool hints surfaced to MCP hosts (Claude Desktop, Cursor, …) so they can
+// render context-aware approval UIs rather than relying on the server to own
+// the approval prompt. (#39 follow-up — m13v's framing.)
+//
+// All DOMShell tools talk to the browser, so openWorldHint: true is implicit.
+// readOnlyHint / destructiveHint are the discriminating signals the host uses
+// to decide how prominently to ask for human approval. Spec defaults are
+// readOnlyHint=false, destructiveHint=true — we override only where they
+// differ from the conservative default.
+//
+// These are hints, not policy. The server's own tier checks (--allow-write,
+// --allow-sensitive) remain the actual security boundary.
+const ANNO_READ      = { readOnlyHint: true,  openWorldHint: true } as const;
+const ANNO_NAVIGATE  = { readOnlyHint: false, destructiveHint: false, openWorldHint: true } as const;
+const ANNO_WRITE     = { readOnlyHint: false, destructiveHint: true,  openWorldHint: true } as const;
+const ANNO_SENSITIVE = { readOnlyHint: false, destructiveHint: true,  openWorldHint: true } as const;
+
 function getCommandTier(command: string): "read" | "navigate" | "write" | "sensitive" {
   const cmd = command.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
   if (NAVIGATE_COMMANDS.has(cmd)) return "navigate";
@@ -569,6 +588,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
     "domshell_tabs",
     "List all open browser tabs with their IDs, titles, URLs, and window info. Use this to find the right tab before switching. Equivalent to 'ls ~/tabs/'.",
     {},
+    ANNO_READ,
     async () => ({
       content: [{ type: "text", text: await executeWithSecurity("tabs") }],
     })
@@ -578,6 +598,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
     "domshell_here",
     "Jump to the active tab in the last focused Chrome window. Use this to quickly enter whichever tab the user is currently looking at, without needing to know the tab ID.",
     {},
+    ANNO_READ,
     async () => ({
       content: [{ type: "text", text: await executeWithSecurity("here") }],
     })
@@ -587,6 +608,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
     "domshell_ls",
     "List children of the current directory. In the DOM tree: shows elements as files and directories. At the browser level (~): shows tabs/windows.\n\nFlags:\n  -l              Long format (more detail per element)\n  --meta          Show DOM properties (href, src, id) inline — great for extracting links\n  --text          Show visible text preview per element\n  -r              Recursive listing\n  -n N            Limit to N results\n  --offset N      Skip first N children (pagination)\n  --type ROLE     Filter by AX role (link, heading, button, etc.)\n  --count         Just count children\n  --textlen N     Max chars for text preview (default 80)\n  --after NAME    Show only children after the named element (sibling navigation)\n  --before NAME   Show only children before the named element (sibling navigation)\n\nSibling navigation: Use --after/--before to find content relative to a landmark. Example: ls --after See_also_heading -n 3 --text shows the 3 elements after a heading. Combines with --type: ls --after intro --type link --meta.\n\nPipe support: ls output can be piped into grep for filtering: ls --text | grep keyword.\n\nBest for: viewing immediate children of the current element.\nNOT recommended for: searching deep in the tree — use domshell_find or domshell_grep instead.",
     { options: z.string().optional().describe("Flags and options, e.g. '-l', '-n 10', '--type button', '--text', '--meta --text', '--after heading_name', or '~/tabs/' for tab listing") },
+    ANNO_READ,
     async ({ options }) => ({
       content: [{ type: "text", text: await executeWithSecurity(`ls ${options ?? ""}`.trim()) }],
     })
@@ -596,6 +618,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
     "domshell_cd",
     "Change directory — sets your scope for all subsequent commands (ls, find, grep, text all operate relative to current directory).\n\nPaths: 'main/form', '..', '~' (browser root), '~/tabs/<id>', '~/tabs/<pattern>', '%here%' (focused tab).\n\nWhen to cd:\n  - cd into a SECTION (article, main, sidebar) to scope find/grep/ls to that area\n  - cd into ~/tabs/<id> to switch between tabs\n  - cd .. to go up when done with a section\n\nWhen NOT to cd:\n  - To read a child's text: use 'domshell_text' with the name parameter instead (saves a cd + cd .. round trip)\n  - To inspect a child: use 'domshell_cat' with the name parameter instead\n  - To extract links: domshell_find --type link --meta works from the current directory",
     { path: z.string().describe("Path: DOM path, '~', '~/tabs/<id>', '~/windows/<id>', '%here%', '..', '/'") },
+    ANNO_READ,
     async ({ path }) => ({
       content: [{ type: "text", text: await executeWithSecurity(`cd ${path}`) }],
     })
@@ -605,6 +628,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
     "domshell_pwd",
     "Print the current working directory path in the DOM tree.",
     {},
+    ANNO_READ,
     async () => ({
       content: [{ type: "text", text: await executeWithSecurity("pwd") }],
     })
@@ -614,6 +638,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
     "domshell_cat",
     "Read detailed metadata about a DOM element: role, type, AX ID, DOM backend ID, value, child count, text content (textContent), visible text (innerText — only rendered text, respects CSS visibility), and outerHTML snippet.",
     { name: z.string().describe("Name or path of the element (e.g. 'link_name' or 'main/link_name')") },
+    ANNO_READ,
     async ({ name }) => ({
       content: [{ type: "text", text: await executeWithSecurity(`cat ${name}`) }],
     })
@@ -631,6 +656,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
       textlen: z.number().optional().describe("Maximum characters for text preview (default: 80)"),
       content: z.boolean().optional().describe("Also match against visible text content of elements (slower but finds elements by their displayed text, e.g. find a heading whose text says 'See also')"),
     },
+    ANNO_READ,
     async ({ pattern, type, limit, meta, text, textlen, content }) => {
       let cmd = "find";
       if (pattern) cmd += ` ${pattern}`;
@@ -653,6 +679,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
       limit: z.number().optional().describe("Maximum number of results"),
       content: z.boolean().optional().describe("Also match against visible text content of elements (slower but finds elements by their displayed text)"),
     },
+    ANNO_READ,
     async ({ pattern, recursive, limit, content }) => {
       let cmd = "grep";
       if (recursive) cmd += " -r";
@@ -667,6 +694,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
     "domshell_tree",
     "Show a tree view of the current directory in the DOM, displaying the hierarchy of elements with type prefixes [d]=directory, [x]=interactive, [-]=static.",
     { depth: z.number().optional().describe("Maximum depth to display (default: 2)") },
+    ANNO_READ,
     async ({ depth }) => ({
       content: [{ type: "text", text: await executeWithSecurity(`tree ${depth ?? 2}`) }],
     })
@@ -680,6 +708,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
       limit: z.number().optional().describe("Maximum characters to return"),
       links: z.boolean().optional().describe("Include link URLs inline as [text](url) markdown"),
     },
+    ANNO_READ,
     async ({ name, limit, links }) => {
       let cmd = "text";
       if (name) cmd += ` ${name}`;
@@ -700,6 +729,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
       text: z.boolean().optional().describe("Include visible text preview per element"),
       textlen: z.number().optional().describe("Max chars for text preview (default: 120)"),
     },
+    ANNO_READ,
     async ({ name, depth, limit, meta, text, textlen }) => {
       let cmd = "read";
       if (name) cmd += ` ${name}`;
@@ -716,6 +746,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
     "domshell_refresh",
     "Force re-fetch the Accessibility Tree. Use after page navigation or significant DOM changes. Note: the tree also auto-refreshes when changes are detected.",
     {},
+    ANNO_READ,
     async () => ({
       content: [{ type: "text", text: await executeWithSecurity("refresh") }],
     })
@@ -725,6 +756,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
     "domshell_diff",
     "Compare the current AX tree against the snapshot taken before the last write/navigate action (click, type, submit, select, navigate, open, back, forward, scroll). Shows added, removed, and changed elements. Use after a click or form submission to see exactly what changed on the page instead of re-exploring with ls/find.",
     {},
+    ANNO_READ,
     async () => ({
       content: [{ type: "text", text: await executeWithSecurity("diff --json") }],
     })
@@ -734,6 +766,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
     "domshell_eval",
     "Evaluate a JavaScript expression in the tab context (read-only). Returns the result. Unlike domshell_js (which requires --allow-write), eval is always available in read-only mode. Use for extracting data without write permission.\n\nExamples:\n  eval document.title\n  eval window.location.href\n  eval document.querySelectorAll('a').length\n  eval [...document.querySelectorAll('h2')].map(h => h.textContent)",
     { expression: z.string().describe("JavaScript expression to evaluate") },
+    ANNO_READ,
     async ({ expression }) => ({
       content: [{ type: "text", text: await executeWithSecurity(`eval ${expression}`) }],
     })
@@ -746,6 +779,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
       pattern: z.string().optional().describe("Filter functions by name pattern (case-insensitive substring match)"),
       json: z.boolean().optional().describe("Return JSON output instead of formatted text"),
     },
+    ANNO_READ,
     async ({ pattern, json }) => {
       let cmd = "functions";
       if (pattern) cmd += ` ${pattern}`;
@@ -758,6 +792,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
     "domshell_watch",
     "Re-run a command periodically and collect results. Useful for monitoring dynamic content changes within a single tool call instead of making N separate calls.\n\nOptions:\n  --interval N      Seconds between runs (default: 2, min: 0.5)\n  --times N         Number of iterations (default: 5, max: 100)\n  --until-change    Stop early when output differs from previous iteration\n\nTotal runtime capped at 120 seconds.\n\nExamples:\n  watch ls --times 3 --interval 1\n  watch \"eval document.title\" --until-change --interval 1",
     { command: z.string().describe("The command to re-run periodically (e.g. 'ls', 'eval document.title')") },
+    ANNO_WRITE,
     async ({ command }) => ({
       content: [{ type: "text", text: await executeWithSecurity(`watch ${command}`) }],
     })
@@ -770,6 +805,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
       source: z.string().describe("Source command whose output lines become iteration items"),
       template: z.string().describe("Action template with {} placeholder replaced by each line"),
     },
+    ANNO_WRITE,
     async ({ source, template }) => ({
       content: [{ type: "text", text: await executeWithSecurity(`for ${source} : ${template}`) }],
     })
@@ -779,6 +815,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
     "domshell_script",
     "Save and run multi-command scripts. Scripts persist across service worker restarts.\n\nSubcommands:\n  script list                    List saved scripts\n  script save <name> cmd1 ; cmd2 Save commands (separated by ' ; ')\n  script show <name>             Show commands in a script\n  script run <name> [args...]    Execute with $1, $2 variable substitution\n  script delete <name>           Delete a script\n\nIMPORTANT: Multi-word arguments for 'script run' MUST be quoted with double quotes:\n  script run search \"Artificial intelligence\"     (correct: $1 = Artificial intelligence)\n  script run search Artificial intelligence        (WRONG: $1 = Artificial, $2 = intelligence)\n\nExamples:\n  script save search open https://en.wikipedia.org ; submit search_input $1\n  script run search \"machine learning\"\n  script run search \"deep learning\"",
     { command: z.string().describe("Script subcommand and arguments. IMPORTANT: quote multi-word args with double quotes (e.g. 'run myscraper \"Artificial intelligence\"', 'save extract open url ; text', 'list')") },
+    ANNO_WRITE,
     async ({ command }) => ({
       content: [{ type: "text", text: await executeWithSecurity(`script ${command}`) }],
     })
@@ -790,6 +827,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
     {
       command: z.string().describe("The command to run in each tab, optionally prefixed with --pattern FILTER and/or --limit N"),
     },
+    ANNO_WRITE,
     async ({ command }) => ({
       content: [{ type: "text", text: await executeWithSecurity(`each ${command}`) }],
     })
@@ -802,6 +840,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
       name: z.string().optional().describe("Name or path of element to extract links from (e.g. 'nav' or 'main/nav'). Default: current directory"),
       limit: z.number().optional().describe("Maximum number of links to return"),
     },
+    ANNO_READ,
     async ({ name, limit }) => {
       let cmd = "extract_links";
       if (name) cmd += ` ${name}`;
@@ -818,6 +857,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
       format: z.enum(["markdown", "csv"]).optional().describe("Output format (default: markdown)"),
       limit: z.number().optional().describe("Maximum number of rows to return"),
     },
+    ANNO_READ,
     async ({ name, format, limit }) => {
       let cmd = `extract_table ${name}`;
       if (format) cmd += ` --format ${format}`;
@@ -833,6 +873,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
       "domshell_click",
       "Click a DOM element. May trigger navigation, form submission, or page changes. The DOM tree auto-refreshes on the next command.\n\nAfter clicking: use domshell_ls or domshell_pwd to verify the page actually changed. Some clicks (like search buttons) may need a domshell_refresh to see updated content. If clicking a search/submit button doesn't navigate, try using domshell_navigate as a fallback.",
       { name: z.string().describe("Name or path of the element to click (e.g. 'submit_btn' or 'form/submit_btn')") },
+      ANNO_WRITE,
       async ({ name }) => ({
         content: [{ type: "text", text: await executeWithSecurity(`click ${name}`) }],
       })
@@ -842,6 +883,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
       "domshell_focus",
       "Focus an input element. Use before 'domshell_type' to direct keyboard input to the right field.",
       { name: z.string().describe("Name or path of the input to focus (e.g. 'search_input' or 'form/search_input')") },
+      ANNO_WRITE,
       async ({ name }) => ({
         content: [{ type: "text", text: await executeWithSecurity(`focus ${name}`) }],
       })
@@ -855,6 +897,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
         amount: z.number().optional().describe("Number of viewport heights to scroll (default: 1)"),
         target: z.string().optional().describe("Element name or path to scroll into view (e.g. 'see_also_heading', 'main/article/table_123')"),
       },
+      ANNO_WRITE,
       async ({ direction, amount, target }) => {
         let cmd = "scroll";
         if (target) {
@@ -873,6 +916,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
       {
         code: z.string().describe("JavaScript code to evaluate in the tab context. Can be an expression or statement block. Async/await and Promises are supported."),
       },
+      ANNO_WRITE,
       async ({ code }) => ({
         content: [{ type: "text", text: await executeWithSecurity(`js ${code}`) }],
       })
@@ -882,6 +926,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
       "domshell_type",
       "Type text into the currently focused element. Use domshell_focus first to target an input field.\n\nFor search forms: after typing, you may need to either:\n  1. click the submit/search button, OR\n  2. type '\\n' to simulate pressing Enter\n\nIf the page doesn't navigate after form submission, use domshell_navigate as a fallback to go to the expected URL directly.",
       { text: z.string().describe("Text to type into the focused element") },
+      ANNO_WRITE,
       async ({ text }) => ({
         content: [{ type: "text", text: await executeWithSecurity(`type ${text}`) }],
       })
@@ -891,6 +936,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
       "domshell_navigate",
       "Navigate the current tab to a URL. Automatically rebuilds the accessibility tree after navigation completes. Requires a tab context (cd into a tab first). Use this to go to a specific website without opening a new tab.",
       { url: z.string().describe("URL to navigate to (e.g. 'https://example.com' or 'example.com')") },
+      ANNO_NAVIGATE,
       async ({ url }) => ({
         content: [{ type: "text", text: await executeWithSecurity(`navigate ${url}`) }],
       })
@@ -900,6 +946,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
       "domshell_open",
       "Open a URL in a new tab and enter it (path becomes ~/tabs/<id>). Automatically builds the accessibility tree after page loads. Works from any location.\n\nAfter opening a page, a typical extraction workflow is:\n  1. open URL\n  2. find the section you need (find --type heading, or grep section_name with recursive: true)\n  3. cd into the container\n  4. text (for content) or find --type link --meta (for links)",
       { url: z.string().describe("URL to open in a new tab (e.g. 'https://example.com' or 'example.com')") },
+      ANNO_NAVIGATE,
       async ({ url }) => ({
         content: [{ type: "text", text: await executeWithSecurity(`open ${url}`) }],
       })
@@ -913,6 +960,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
         value: z.string().describe("Text value to type into the input"),
         submit_button: z.string().optional().describe("Name or path of submit button to click (default: press Enter)"),
       },
+      ANNO_WRITE,
       async ({ input, value, submit_button }) => {
         let cmd = `submit ${input} ${value}`;
         if (submit_button) cmd += ` --submit ${submit_button}`;
@@ -924,6 +972,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
       "domshell_back",
       "Navigate back in browser history. Equivalent to the browser back button. Automatically refreshes the AX tree after navigation. Use this instead of domshell_navigate when returning to a previously visited page — it's faster (uses browser cache) and doesn't require remembering the URL.",
       {},
+      ANNO_NAVIGATE,
       async () => ({
         content: [{ type: "text", text: await executeWithSecurity("back") }],
       })
@@ -933,6 +982,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
       "domshell_forward",
       "Navigate forward in browser history. Only works after a 'back' command. Automatically refreshes the AX tree after navigation.",
       {},
+      ANNO_NAVIGATE,
       async () => ({
         content: [{ type: "text", text: await executeWithSecurity("forward") }],
       })
@@ -944,6 +994,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
       {
         tabId: z.string().optional().describe("Tab ID to close (default: current tab)"),
       },
+      ANNO_WRITE,
       async ({ tabId }) => ({
         content: [{ type: "text", text: await executeWithSecurity(`close ${tabId ?? ""}`.trim()) }],
       })
@@ -956,6 +1007,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
         name: z.string().describe("Name or path of the <select> element"),
         value: z.string().describe("Option value or visible text to select"),
       },
+      ANNO_WRITE,
       async ({ name, value }) => ({
         content: [{ type: "text", text: await executeWithSecurity(`select ${name} ${value}`) }],
       })
@@ -965,6 +1017,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
       "domshell_screenshot",
       "Capture a PNG screenshot of the current tab. Returns the image for visual inspection. Useful for understanding page layout on unfamiliar sites — one screenshot can replace multiple exploration calls (tree, ls, find) by showing you exactly what the page looks like.",
       {},
+      ANNO_READ,
       async () => {
         const result = await executeWithSecurity("screenshot");
         if (result.startsWith("__SCREENSHOT_BASE64__")) {
@@ -985,6 +1038,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
         type: z.string().optional().describe("Filter by AX role (e.g. 'button', 'link', 'heading')"),
         timeout: z.number().optional().describe("Timeout in seconds (default: 5, max: 30)"),
       },
+      ANNO_READ,
       async ({ pattern, type, timeout }) => {
         let cmd = `wait ${pattern}`;
         if (type) cmd += ` --type ${type}`;
@@ -1000,6 +1054,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
         functionName: z.string().describe("Name of the global function to call (e.g. 'getCount', 'getMessage')"),
         args: z.string().optional().describe("Space-separated arguments to pass to the function"),
       },
+      ANNO_WRITE,
       async ({ functionName, args }) => {
         let cmd = `call ${functionName}`;
         if (args) cmd += ` ${args}`;
@@ -1015,6 +1070,7 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
       "domshell_whoami",
       "Check authentication status by examining cookies for the current page. Shows session cookies and expiry.",
       {},
+      ANNO_SENSITIVE,
       async () => ({
         content: [{ type: "text", text: await executeWithSecurity("whoami") }],
       })
@@ -1053,6 +1109,7 @@ NOTES
       command: z.string().describe("A DOMShell command, or multiple commands separated by newlines (e.g. 'ls -l' or 'open example.com\\ncd main\\ntext')"),
       group_id: z.string().optional().describe("Which session lane to run in. Omit to stay in your current lane; pass \"new\" to create a fresh isolated lane; or pass a lane id to join an existing one (e.g. to continue a session another agent started). Every response ends with a '[lane: <id>]' line — pass that id back as group_id to stay in the same lane."),
     },
+    ANNO_WRITE,
     async ({ command, group_id }) => {
       // Multi-command: each non-blank line runs in sequence (ADR-002 D3).
       const lines = command.split("\n").map((l) => l.trim()).filter(Boolean);

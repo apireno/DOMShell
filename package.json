@@ -1,6 +1,6 @@
 {
   "name": "domshell",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "A Chrome Extension that turns the DOM into a filesystem — navigate the web with ls, cd, cat, and grep.",
   "type": "module",
   "scripts": {

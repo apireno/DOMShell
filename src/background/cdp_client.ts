@@ -175,17 +175,26 @@ export class CDPClient {
   }
 
   /**
-   * Dispatch a single trusted key event (keyDown + keyUp) to whatever element
-   * currently has DOM focus. Produces real CDP-level events that React-driven
-   * SPAs respect (event.isTrusted === true) — useful when an element's
-   * activation handler listens for Enter rather than click. (#40)
+   * Dispatch a single trusted key event pair to whatever element currently has
+   * DOM focus. Produces real CDP-level events that React-driven SPAs respect
+   * (event.isTrusted === true) — useful when an element's activation handler
+   * listens for Enter rather than click. (#40)
+   *
+   * Down-event type matters: CDP's "keyDown" implies "this event will produce
+   * text input" and Chrome can silently drop it for non-text-producing keys
+   * (Enter, Escape, arrows, F-keys). Use "rawKeyDown" for those, and reserve
+   * "keyDown" for printable characters where `text` carries the produced char.
+   * (Matches Puppeteer/Playwright behavior.)
    *
    * `key` is the DOM key value ("Enter", "Escape", "Tab", "ArrowDown", "a", …).
    * `modifiers` is a CDP modifier bitmask: Alt=1, Ctrl=2, Meta=4, Shift=8.
    */
   async dispatchKey(key: string, modifiers: number = 0): Promise<void> {
     const params = keyEventParams(key, modifiers);
-    await this.send("Input.dispatchKeyEvent", { type: "keyDown", ...params });
+    // If the helper attached `text`, the down event is a text-producing keyDown;
+    // otherwise it's a rawKeyDown (special key, no text).
+    const downType = "text" in params ? "keyDown" : "rawKeyDown";
+    await this.send("Input.dispatchKeyEvent", { type: downType, ...params });
     await this.send("Input.dispatchKeyEvent", { type: "keyUp", ...params });
   }
 
@@ -708,14 +717,20 @@ function keyEventParams(key: string, modifiers: number = 0): Record<string, any>
 }
 
 /** DOM key name → CDP params for non-character keys we want to ship working
- *  out of the box. Extend as new SPAs surface needs. */
-const NAMED_KEYS: Record<string, { key: string; code?: string; windowsVirtualKeyCode?: number }> = {
-  Enter:       { key: "Enter",       code: "Enter",       windowsVirtualKeyCode: 13 },
+ *  out of the box. Extend as new SPAs surface needs.
+ *
+ *  `text` is set for keys that conventionally produce text input (Enter='\r',
+ *  Tab='\t', Space=' '). Its presence routes the down event through CDP's
+ *  text-producing `keyDown` path; without it `dispatchKey` falls back to
+ *  `rawKeyDown` which is what Chrome wants for special keys like Escape,
+ *  arrows, and F-keys. (Matches Puppeteer/Playwright key dispatch.) */
+const NAMED_KEYS: Record<string, { key: string; code?: string; windowsVirtualKeyCode?: number; text?: string }> = {
+  Enter:       { key: "Enter",       code: "Enter",       windowsVirtualKeyCode: 13, text: "\r" },
+  Tab:         { key: "Tab",         code: "Tab",         windowsVirtualKeyCode: 9,  text: "\t" },
+  Space:       { key: " ",           code: "Space",       windowsVirtualKeyCode: 32, text: " "  },
   Escape:      { key: "Escape",      code: "Escape",      windowsVirtualKeyCode: 27 },
-  Tab:         { key: "Tab",         code: "Tab",         windowsVirtualKeyCode: 9  },
   Backspace:   { key: "Backspace",   code: "Backspace",   windowsVirtualKeyCode: 8  },
   Delete:      { key: "Delete",      code: "Delete",      windowsVirtualKeyCode: 46 },
-  Space:       { key: " ",           code: "Space",       windowsVirtualKeyCode: 32 },
   ArrowUp:     { key: "ArrowUp",     code: "ArrowUp",     windowsVirtualKeyCode: 38 },
   ArrowDown:   { key: "ArrowDown",   code: "ArrowDown",   windowsVirtualKeyCode: 40 },
   ArrowLeft:   { key: "ArrowLeft",   code: "ArrowLeft",   windowsVirtualKeyCode: 37 },

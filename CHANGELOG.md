@@ -9,7 +9,7 @@ Patch release sweeping up four bugs found while exercising 1.3.0/2.0.0 against r
 
 ### Added — Chrome extension (`1.3.1`)
 
-- **`key` command** — dispatch a single trusted keyDown+keyUp pair (CDP `Input.dispatchKeyEvent`) to the currently-focused element. Pairs naturally with `focus <name>` for SPAs whose activation handler listens for Enter, Escape, or arrow keys rather than mouse clicks. Built-in names: `Enter`, `Escape`, `Tab`, `Backspace`, `Delete`, `Space`, `ArrowUp/Down/Left/Right`, `Home`, `End`, `PageUp`, `PageDown`, `F1`–`F12`, plus single characters with `--modifiers ctrl,shift,alt,meta`. Write tier. Motivated by LinkedIn's conversation list, whose `<div tabindex="0">` rows activate on Enter — see #37 below. (#40)
+- **`key` command** — dispatch a single trusted keyDown+keyUp pair (CDP `Input.dispatchKeyEvent`) to the currently-focused element. Pairs naturally with `focus <name>` for SPAs whose activation handler listens for Enter, Escape, or arrow keys rather than mouse clicks. Built-in names: `Enter`, `Escape`, `Tab`, `Backspace`, `Delete`, `Space`, `ArrowUp/Down/Left/Right`, `Home`, `End`, `PageUp`, `PageDown`, `F1`–`F12`, plus single characters with `--modifiers ctrl,shift,alt,meta`. Special keys go through CDP's `rawKeyDown` path (Chrome silently drops `keyDown` events that lack `text`); text-producing keys (Enter='\r', Tab='\t', Space=' ') and printable characters use `keyDown` with `text` set. Write tier. Motivated by LinkedIn's conversation list, whose `<div tabindex="0">` rows activate on Enter — see #37 below. (#40)
 
 ### Fixed — Chrome extension (`1.3.1`)
 

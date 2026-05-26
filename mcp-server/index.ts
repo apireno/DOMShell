@@ -22,7 +22,16 @@ function getFlagValue(name: string, fallback: string): string {
 
 const ALLOW_WRITE = hasFlag("--allow-write") || hasFlag("--allow-all");
 const ALLOW_SENSITIVE = hasFlag("--allow-sensitive") || hasFlag("--allow-all");
-const NO_CONFIRM = hasFlag("--no-confirm");
+// Per-action terminal confirmation is OFF by default — the prompt lives in
+// the MCP server's stdout/stderr, not in the agent or side panel, so it can
+// only be answered by a user actively watching the server terminal. That's
+// not the canonical setup (Claude Desktop / Cursor / CLI-Anything all spawn
+// the server in the background). Tier flags (--allow-write, --allow-sensitive),
+// the audit log, and domain allowlists remain the actual security boundaries.
+// `--no-confirm` is preserved as an explicit no-op for any caller that still
+// passes it (e.g. CLI-Anything's PR #135 config). `--confirm` re-enables the
+// terminal-prompt path for users who run the server in their own terminal.
+const NO_CONFIRM = !hasFlag("--confirm");
 const EXPOSE_COOKIES = hasFlag("--expose-cookies");
 const GRANULAR = hasFlag("--granular");  // expose the 38 per-command tools (ADR-002 D2)
 const PORT = parseInt(getFlagValue("--port", "9876"), 10);
@@ -99,7 +108,7 @@ function confirmAction(description: string): Promise<boolean> {
     // the whole process on a synchronous readSync). Deny clearly so the agent
     // gets an actionable error pointing at the right CLI flag. (#39)
     log(`WARNING: Cannot confirm '${description}' — no interactive terminal attached.`);
-    log("Restart the MCP server with --no-confirm to auto-approve write actions in non-interactive (GUI-spawned) mode.");
+    log("Remove --confirm from the MCP server args to auto-approve in non-interactive (GUI-spawned) mode (--confirm is opt-in; the default is auto-approve).");
     return Promise.resolve(false);
   }
 
@@ -124,7 +133,7 @@ function confirmAction(description: string): Promise<boolean> {
       // /dev/tty open failed even though isTTY was true — fall back to deny.
       if (timer !== undefined) clearTimeout(timer);
       log("WARNING: Cannot open /dev/tty for confirmation. Denying write action.");
-      log("Use --no-confirm to skip confirmation prompts.");
+      log("Remove --confirm from the MCP server args to auto-approve (per-action prompts are opt-in; off by default).");
       resolve(false);
     }
 
@@ -534,7 +543,7 @@ ANTI-PATTERNS (avoid these):
 - Do NOT make N separate eval calls for N items — use for "eval [items]" : eval <per-item query> (1 call instead of N)
 - Do NOT poll with separate tool calls to detect changes — use watch "cmd" --until-change to monitor within a single call
 
-Note: Use --no-confirm when starting the server to skip interactive confirmation prompts for write actions.`;
+Note: per-action terminal confirmation is OFF by default. Add --confirm to the server args if you want a y/n prompt in the server's terminal before every write action. The audit log captures every command either way.`;
 
 function createMcpServer(sidRef: { sid: string }): McpServer {
   const server = new McpServer(
@@ -1218,7 +1227,7 @@ async function main() {
     log("In the DOMShell terminal, run:");
     log(`  connect ${AUTH_TOKEN}`);
     log("");
-    log(`Security: write=${ALLOW_WRITE ? "ON" : "OFF"}, sensitive=${ALLOW_SENSITIVE ? "ON" : "OFF"}, confirm=${!NO_CONFIRM ? "ON" : "OFF"}`);
+    log(`Security: write=${ALLOW_WRITE ? "ON" : "OFF"}, sensitive=${ALLOW_SENSITIVE ? "ON" : "OFF"}, per-action confirm=${!NO_CONFIRM ? "ON" : "OFF (default; add --confirm to enable)"}`);
     log(`Tools: ${GRANULAR ? "granular (38 per-command tools)" : "single-tool (domshell_execute) — pass --granular for the per-command tools"}`);
     if (ALLOWED_DOMAINS.length > 0) {
       log(`Domains: ${ALLOWED_DOMAINS.join(", ")}`);

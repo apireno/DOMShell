@@ -17,7 +17,10 @@ interface InitOptions {
   yes: boolean;
   allowWrite: boolean;
   allowSensitive: boolean;
-  noConfirm: boolean;
+  /** Inject `--confirm` into the generated config — opt-in per-action prompts.
+   *  Default behavior (this false) is auto-approve writes; the audit log and
+   *  tier flags remain the security boundary. */
+  confirm: boolean;
   token: string | null;
   client: string | null;
 }
@@ -89,20 +92,24 @@ async function promptClientSelection(clients: ClientConfig[]): Promise<ClientCon
   return indices.length > 0 ? indices.map((i) => clients[i]) : [clients[0]];
 }
 
-async function promptPermissions(): Promise<{ allowWrite: boolean; noConfirm: boolean }> {
+async function promptPermissions(): Promise<{ allowWrite: boolean; confirm: boolean }> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
 
   const writeAnswer = await ask(rl, "Enable write tools (click, type, navigate)? [Y/n]: ");
   const allowWrite = writeAnswer.trim().toLowerCase() !== "n";
 
-  let noConfirm = false;
+  // Per-action terminal prompts are OFF by default — they live in the MCP
+  // server's terminal, which is detached from the agent and the side panel
+  // for the canonical GUI-spawned setup. Offer it as opt-in for users who
+  // run the server in their own terminal.
+  let confirm = false;
   if (allowWrite) {
-    const confirmAnswer = await ask(rl, "Skip confirmation prompts for write actions? [y/N]: ");
-    noConfirm = confirmAnswer.trim().toLowerCase() === "y";
+    const confirmAnswer = await ask(rl, "Enable per-action y/n prompts in the server's terminal before each write? [y/N]: ");
+    confirm = confirmAnswer.trim().toLowerCase() === "y";
   }
 
   rl.close();
-  return { allowWrite, noConfirm };
+  return { allowWrite, confirm };
 }
 
 async function promptOverwrite(clientName: string): Promise<boolean> {
@@ -173,7 +180,7 @@ function writeConfig(
 function printSummary(targets: ClientConfig[], token: string, options: InitOptions): void {
   const serverArgs = ["npx", "@apireno/domshell"];
   if (options.allowWrite) serverArgs.push("--allow-write");
-  if (options.noConfirm) serverArgs.push("--no-confirm");
+  if (options.confirm) serverArgs.push("--confirm");
   serverArgs.push("--token", token);
 
   log("");
@@ -213,7 +220,9 @@ export async function main(): Promise<void> {
     yes: nonInteractive,
     allowWrite: nonInteractive,
     allowSensitive: false,
-    noConfirm: nonInteractive,
+    // Non-interactive --yes default: don't inject --confirm (auto-approve, the
+    // new default behavior). Interactive users get asked.
+    confirm: false,
     token: getInitFlagValue("--token"),
     client: getInitFlagValue("--client"),
   };
@@ -249,7 +258,7 @@ export async function main(): Promise<void> {
   if (!options.yes) {
     const perms = await promptPermissions();
     options.allowWrite = perms.allowWrite;
-    options.noConfirm = perms.noConfirm;
+    options.confirm = perms.confirm;
   }
 
   // Check for existing entries (interactive overwrite prompts)

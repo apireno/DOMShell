@@ -104,7 +104,8 @@ Start the server with `--granular` and the 38 per-command tools are exposed alon
 | `--domains a.com,b.com` | Restrict to specific domains |
 | `--token TOKEN` | Set auth token (auto-generated if omitted) |
 | `--log-file PATH` | Audit log location (default: audit.log) |
-| `--no-confirm` | Skip confirmation prompts |
+| `--confirm` | Opt in to per-action y/n prompts in the server terminal before each write. Off by default. |
+| `--no-confirm` | No-op (kept for backward compatibility — per-action prompts are off by default). |
 
 ## Security
 

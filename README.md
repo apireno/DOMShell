@@ -864,7 +864,7 @@ npm install -g @apireno/domshell
 Or run directly without installing:
 
 ```bash
-npx @apireno/domshell --allow-write --no-confirm --token my-secret-token
+npx @apireno/domshell --allow-write --token my-secret-token
 ```
 
 ### Architecture
@@ -906,7 +906,7 @@ npx @apireno/domshell init --yes
 **1. Start the MCP server:**
 
 ```bash
-npx @apireno/domshell --allow-write --no-confirm --token my-secret-token
+npx @apireno/domshell --allow-write --token my-secret-token
 ```
 
 The server starts two listeners:
@@ -932,7 +932,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
   "mcpServers": {
     "domshell": {
       "command": "npx",
-      "args": ["-y", "@apireno/domshell", "--allow-write", "--no-confirm", "--token", "my-secret-token"]
+      "args": ["-y", "@apireno/domshell", "--allow-write", "--token", "my-secret-token"]
     }
   }
 }
@@ -984,23 +984,26 @@ The **Navigate** tier is separate from Write because navigation is equivalent to
 | `--allow-write` | Enable click/focus/type/scroll/js/select/close/navigate/back/forward commands |
 | `--allow-sensitive` | Enable whoami (cookie access) |
 | `--allow-all` | Shorthand for both |
-| `--no-confirm` | Skip user confirmation for write actions (use with caution) |
+| `--confirm` | Opt in to per-action y/n prompts in the server terminal before each write. Off by default. |
+| `--no-confirm` | No-op (kept for backward compatibility — per-action prompts are off by default). |
 | `--domains example.com,app.example.com` | Restrict commands to specific domains |
 | `--expose-cookies` | Show full cookie values (default: redacted) |
 | `--mcp-port N` | MCP HTTP endpoint port (default: 3001) |
 | `--port N` | WebSocket bridge port (default: 9876) |
 | `--log-file PATH` | Audit log file (default: audit.log) |
 
-#### User Confirmation
+#### Per-Action Confirmation (opt-in)
 
-When write commands are enabled, the MCP server prompts in its terminal before executing:
+Per-action terminal prompts are **off by default** — the MCP server's terminal is detached from where the agent and side panel actually run, so the prompt is awkward to answer in any GUI-spawned setup (Claude Desktop, Cursor, CLI-Anything's harness). The audit log captures every command, and the tier flags (`--allow-write`, `--allow-sensitive`) plus `--domains` remain the actual security boundaries.
+
+If you start the server in your own terminal and want a y/n prompt before every write, add `--confirm`:
 
 ```
 [DOMShell] Claude wants to: click submit_btn
 Allow? (y/n):
 ```
 
-This blocks until you type `y` or `n` (60-second timeout → deny). Disable with `--no-confirm` for trusted environments. **When using Claude Desktop**, always use `--no-confirm` since the MCP server runs without a terminal — without it, write commands will silently fail.
+`--no-confirm` is preserved as a no-op (it matches the default), so any existing config that passes it keeps working unchanged.
 
 #### Auth Token
 
@@ -1070,7 +1073,7 @@ Start the server with `--granular` for the per-command tools:
 npx @apireno/domshell --granular
 ```
 
-**Security is identical in both modes.** DOMShell's server-side tiers (`write` / `sensitive` / `confirm` — set by `--allow-write`, `--allow-sensitive`, `--no-confirm`) gate risky operations regardless of which tool issued the command. Granular mode does **not** add security — it adds an extra *approval prompt* in your MCP client per operation type. That's more human oversight, not more protection.
+**Security is identical in both modes.** DOMShell's server-side tiers (`write` / `sensitive` — set by `--allow-write`, `--allow-sensitive`, with optional `--confirm` for per-action server-terminal prompts) gate risky operations regardless of which tool issued the command. Granular mode does **not** add security — it adds an extra *approval prompt* in your MCP client per operation type. That's more human oversight, not more protection.
 
 ### MCP Tools Reference (`--granular` mode)
 

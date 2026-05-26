@@ -175,6 +175,21 @@ export class CDPClient {
   }
 
   /**
+   * Dispatch a single trusted key event (keyDown + keyUp) to whatever element
+   * currently has DOM focus. Produces real CDP-level events that React-driven
+   * SPAs respect (event.isTrusted === true) — useful when an element's
+   * activation handler listens for Enter rather than click. (#40)
+   *
+   * `key` is the DOM key value ("Enter", "Escape", "Tab", "ArrowDown", "a", …).
+   * `modifiers` is a CDP modifier bitmask: Alt=1, Ctrl=2, Meta=4, Shift=8.
+   */
+  async dispatchKey(key: string, modifiers: number = 0): Promise<void> {
+    const params = keyEventParams(key, modifiers);
+    await this.send("Input.dispatchKeyEvent", { type: "keyDown", ...params });
+    await this.send("Input.dispatchKeyEvent", { type: "keyUp", ...params });
+  }
+
+  /**
    * Focus an element by its backend node ID.
    */
   async focusByBackendNodeId(backendDOMNodeId: number): Promise<void> {
@@ -659,3 +674,66 @@ function collectChildFrames(tree: FrameTreeNode): Array<{ id: string; url: strin
   }
   return frames;
 }
+
+/**
+ * Build the Input.dispatchKeyEvent parameter object for a named DOM key.
+ *
+ * CDP needs both `key` (DOM key value) and `code` (DOM physical-key code) on
+ * keyDown/Up for React's synthetic event system to fire correctly. Many
+ * non-character keys also need `windowsVirtualKeyCode` for legacy handler
+ * paths. Character keys additionally need `text` so the page's `keypress`
+ * (and `input`) events carry the right character.
+ */
+function keyEventParams(key: string, modifiers: number = 0): Record<string, any> {
+  const k = NAMED_KEYS[key];
+  if (k) return { ...k, modifiers };
+
+  // Single character — treat as a printable key. Use the upper-case form for
+  // `code` (e.g. "KeyA"), the actual char for `key` and `text`.
+  if (key.length === 1) {
+    const upper = key.toUpperCase();
+    const code = /[A-Z]/.test(upper) ? `Key${upper}` : /[0-9]/.test(key) ? `Digit${key}` : undefined;
+    return {
+      key,
+      code,
+      text: key,
+      windowsVirtualKeyCode: upper.charCodeAt(0),
+      modifiers,
+    };
+  }
+
+  // Unknown — pass through and let CDP decide. Logs will show if the page
+  // didn't respond.
+  return { key, modifiers };
+}
+
+/** DOM key name → CDP params for non-character keys we want to ship working
+ *  out of the box. Extend as new SPAs surface needs. */
+const NAMED_KEYS: Record<string, { key: string; code?: string; windowsVirtualKeyCode?: number }> = {
+  Enter:       { key: "Enter",       code: "Enter",       windowsVirtualKeyCode: 13 },
+  Escape:      { key: "Escape",      code: "Escape",      windowsVirtualKeyCode: 27 },
+  Tab:         { key: "Tab",         code: "Tab",         windowsVirtualKeyCode: 9  },
+  Backspace:   { key: "Backspace",   code: "Backspace",   windowsVirtualKeyCode: 8  },
+  Delete:      { key: "Delete",      code: "Delete",      windowsVirtualKeyCode: 46 },
+  Space:       { key: " ",           code: "Space",       windowsVirtualKeyCode: 32 },
+  ArrowUp:     { key: "ArrowUp",     code: "ArrowUp",     windowsVirtualKeyCode: 38 },
+  ArrowDown:   { key: "ArrowDown",   code: "ArrowDown",   windowsVirtualKeyCode: 40 },
+  ArrowLeft:   { key: "ArrowLeft",   code: "ArrowLeft",   windowsVirtualKeyCode: 37 },
+  ArrowRight:  { key: "ArrowRight",  code: "ArrowRight",  windowsVirtualKeyCode: 39 },
+  Home:        { key: "Home",        code: "Home",        windowsVirtualKeyCode: 36 },
+  End:         { key: "End",         code: "End",         windowsVirtualKeyCode: 35 },
+  PageUp:      { key: "PageUp",      code: "PageUp",      windowsVirtualKeyCode: 33 },
+  PageDown:    { key: "PageDown",    code: "PageDown",    windowsVirtualKeyCode: 34 },
+  F1:  { key: "F1",  code: "F1",  windowsVirtualKeyCode: 112 },
+  F2:  { key: "F2",  code: "F2",  windowsVirtualKeyCode: 113 },
+  F3:  { key: "F3",  code: "F3",  windowsVirtualKeyCode: 114 },
+  F4:  { key: "F4",  code: "F4",  windowsVirtualKeyCode: 115 },
+  F5:  { key: "F5",  code: "F5",  windowsVirtualKeyCode: 116 },
+  F6:  { key: "F6",  code: "F6",  windowsVirtualKeyCode: 117 },
+  F7:  { key: "F7",  code: "F7",  windowsVirtualKeyCode: 118 },
+  F8:  { key: "F8",  code: "F8",  windowsVirtualKeyCode: 119 },
+  F9:  { key: "F9",  code: "F9",  windowsVirtualKeyCode: 120 },
+  F10: { key: "F10", code: "F10", windowsVirtualKeyCode: 121 },
+  F11: { key: "F11", code: "F11", windowsVirtualKeyCode: 122 },
+  F12: { key: "F12", code: "F12", windowsVirtualKeyCode: 123 },
+};

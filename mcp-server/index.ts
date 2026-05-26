@@ -64,7 +64,7 @@ function audit(entry: string): void {
 // ---- Command Tiers ----
 
 const NAVIGATE_COMMANDS = new Set(["navigate", "goto", "open", "back", "forward"]);
-const WRITE_COMMANDS = new Set(["click", "focus", "type", "scroll", "js", "select", "close", "call"]);
+const WRITE_COMMANDS = new Set(["click", "focus", "type", "key", "scroll", "js", "select", "close", "call"]);
 const SENSITIVE_COMMANDS = new Set(["whoami"]);
 
 function getCommandTier(command: string): "read" | "navigate" | "write" | "sensitive" {
@@ -368,7 +368,7 @@ NAMING NOTE: this guide sometimes writes a command as "domshell_<name>" (e.g. do
 COMMAND REFERENCE
 Browser & tabs: tabs · windows · here · cd <path> · open <url> · navigate <url> · back · forward · close [id] · group [new|attach|detach|close|list]
 Reading: ls [--meta --text --json] · cat <name> · text [name] [--links] · tree [depth] · read [name] · grep [-r] <pattern> · find [--type ROLE --meta --text] <pattern> · extract_links · extract_table <name> · screenshot · diff
-Interacting (write tier, needs --allow-write): click <name> · focus <name> · type <text> · select <name> <value> · scroll down|up|<name> · submit <input> <value> · wait <pattern>
+Interacting (write tier, needs --allow-write): click <name> · focus <name> · type <text> · key <KeyName> [--modifiers ctrl,shift,…] · select <name> <value> · scroll down|up|<name> · submit <input> <value> · wait <pattern>
 JavaScript: eval <expr> (read-only, always available) · js <code> (write tier) · functions [pattern] · call <fn> <args>
 Workflow: watch <cmd> [--until-change] · for "<cmd>" : <template> · script save|run|list|show|delete · each [--pattern F] <cmd> · bookmark <name> · env · export · history · pwd · refresh
 
@@ -1037,7 +1037,7 @@ Most commands accept relative paths, so a separate cd is rarely needed: text mai
 COMMAND REFERENCE
 Browser & tabs: tabs · windows · here · cd <path> · open <url> · navigate <url> · back · forward · close [id] · group [new|attach|detach|close|list]
 Reading: ls [--meta --text --json] · cat <name> · text [name] [--links] · tree [depth] · read [name] · grep [-r] <pattern> · find [--type ROLE --meta --text] <pattern> · extract_links · extract_table <name> · screenshot · diff
-Interacting (write tier): click <name> · focus <name> · type <text> · select <name> <value> · scroll down|up|<name> · submit <input> <value> · wait <pattern>
+Interacting (write tier): click <name> · focus <name> · type <text> · key <KeyName> [--modifiers ctrl,shift,…] · select <name> <value> · scroll down|up|<name> · submit <input> <value> · wait <pattern>
 JavaScript: eval <expr> (read-only) · js <code> (write) · functions [pattern] · call <fn> <args>
 Workflow: watch <cmd> [--until-change] · for "<cmd>" : <template> · script save|run|list · each [--pattern F] <cmd> · bookmark <name> · env · history · pwd · help
 

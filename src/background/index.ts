@@ -933,9 +933,12 @@ const COMMAND_HELP: Record<string, string> = {
   ].join("\r\n"),
 
   ls: [
-    "\x1b[1;36mls\x1b[0m \u2014 List children of the current node",
+    "\x1b[1;36mls\x1b[0m \u2014 List children of the current node, or of a named subtree",
     "",
-    "\x1b[33mUsage:\x1b[0m ls [options]",
+    "\x1b[33mUsage:\x1b[0m ls [options] [path]",
+    "",
+    "Without a path, lists children of the cursor. With a path (single name or",
+    "slash-separated), peeks into that subtree without moving the cursor.",
     "",
     "\x1b[33mOptions:\x1b[0m",
     "  \x1b[32m-l, --long\x1b[0m      Long format: type prefix, role, and name",
@@ -1095,6 +1098,30 @@ const COMMAND_HELP: Record<string, string> = {
     "  js [...document.querySelectorAll('h2')].map(h => h.textContent)",
     "  js document.querySelector('.score').innerText",
     "  js fetch('/api/data').then(r => r.json())",
+  ].join("\r\n"),
+
+  key: [
+    "\x1b[1;36mkey\x1b[0m — Dispatch a trusted keyboard event to the focused element",
+    "",
+    "\x1b[33mUsage:\x1b[0m key <KeyName> [--modifiers ctrl,shift,alt,meta]",
+    "",
+    "Sends a real CDP-level keyDown+keyUp pair (event.isTrusted === true) to",
+    "whatever element currently has DOM focus. Use after `focus <name>` for",
+    "SPAs that listen for Enter/Escape/arrow keys rather than click.",
+    "",
+    "\x1b[33mCommon keys:\x1b[0m",
+    "  Enter Escape Tab Backspace Delete Space",
+    "  ArrowUp ArrowDown ArrowLeft ArrowRight",
+    "  Home End PageUp PageDown",
+    "  F1..F12",
+    "  Single chars: a, A, 1, ! (use --modifiers for ctrl/shift combos)",
+    "",
+    "\x1b[33mExamples:\x1b[0m",
+    "  focus search_input → type 'cats' → key Enter",
+    "  focus conversation_row_7 → key Enter         # activate LinkedIn-style row",
+    "  key Escape                                       # dismiss a modal",
+    "  key s --modifiers ctrl                           # Ctrl+S on the focused doc",
+    "  key Enter --modifiers meta                       # Cmd+Enter on macOS",
   ].join("\r\n"),
 
   back: [
@@ -1663,7 +1690,7 @@ function parseArgs(args: string[]): ParsedArgs {
       flags.add("-r");
     } else if (a === "--count") {
       flags.add("--count");
-    } else if ((a === "-n" || a === "-d" || a === "--offset" || a === "--type" || a === "--textlen" || a === "--format" || a === "--submit" || a === "--after" || a === "--before" || a === "--timeout") && i + 1 < args.length) {
+    } else if ((a === "-n" || a === "-d" || a === "--offset" || a === "--type" || a === "--textlen" || a === "--format" || a === "--submit" || a === "--after" || a === "--before" || a === "--timeout" || a === "--modifiers") && i + 1 < args.length) {
       named[a] = args[++i];
     } else if (a.startsWith("-")) {
       flags.add(a);
@@ -1858,6 +1885,8 @@ async function executeCommand(raw: string): Promise<string> {
         return await handleClick(args);
       case "type":
         return await handleType(args);
+      case "key":
+        return await handleKey(args);
       case "focus":
         return await handleFocus(args);
       case "scroll":
@@ -2091,7 +2120,7 @@ async function ensureFreshTree(): Promise<string> {
 
 const COMMANDS = [
   "help", "tabs", "windows", "here", "refresh", "ls", "cd", "pwd", "cat",
-  "click", "focus", "type", "grep", "find", "whoami", "env", "export",
+  "click", "focus", "type", "key", "grep", "find", "whoami", "env", "export",
   "tree", "read", "debug", "clear", "navigate", "goto", "open", "connect", "disconnect", "text",
   "submit", "extract_links", "extract_table", "scroll", "js", "eval",
   "back", "forward", "close", "screenshot", "select", "wait", "history", "diff", "bookmark",
@@ -2261,8 +2290,17 @@ async function handleLs(args: string[]): Promise<string> {
   const offset = pa.named["--offset"] ? parseInt(pa.named["--offset"], 10) : 0;
   const typeFilter = pa.named["--type"]?.toLowerCase();
 
-  const currentId = getCurrentNodeId();
-  let children = getChildVFSNodes(currentId, nodeMap);
+  // If a positional path was given, peek into that subtree without moving the
+  // cursor. Resolves relative to the cwd (or absolute when starting with `/`).
+  // (#41 — `ls <path>` silently ignored the argument and returned the cwd.)
+  let parentId = getCurrentNodeId();
+  if (pa.positional.length > 0) {
+    const targetPath = pa.positional[0];
+    const target = resolveByPath(parentId, targetPath, nodeMap);
+    if (!target) return `\x1b[31mls: ${targetPath}: No such directory\x1b[0m`;
+    parentId = target.axNodeId;
+  }
+  let children = getChildVFSNodes(parentId, nodeMap);
 
   // Recursive: also include children of directory children
   if (recursive) {
@@ -2674,7 +2712,17 @@ async function navigateOneSegment(segment: string): Promise<string> {
     const match = findChildByName(currentId, segment, nodeMap);
 
     if (!match) {
-      return `\x1b[31mcd: ${segment}: No such directory\x1b[0m`;
+      // Surface what IS reachable from here so the agent can see why the
+      // single-segment lookup failed — usually they're aiming at a grandchild
+      // they saw in `tree` output and need to use the full path. (#42)
+      const siblings = getChildVFSNodes(currentId, nodeMap)
+        .filter(c => c.isDirectory)
+        .slice(0, 12)
+        .map(c => c.name);
+      const sibList = siblings.length === 0
+        ? "\r\n\x1b[90m  (no subdirectories at this level — try 'tree' to see the structure)\x1b[0m"
+        : `\r\n\x1b[90m  Available here: ${siblings.join(", ")}${siblings.length === 12 ? ", …" : ""}\x1b[0m\r\n\x1b[90m  Run 'tree' to see deeper paths, then cd with the full path.\x1b[0m`;
+      return `\x1b[31mcd: ${segment}: No such directory\x1b[0m${sibList}`;
     }
     if (!match.isDirectory) {
       return `\x1b[31mcd: ${segment}: Not a directory (type: [x] ${match.role})\x1b[0m`;
@@ -4077,6 +4125,36 @@ async function handleType(args: string[]): Promise<string> {
   const text = args.join(" ");
   await cdp.typeText(text);
   return `\x1b[32m\u2713 Typed ${text.length} characters\x1b[0m`;
+}
+
+// ---- key ----
+// (#40) Dispatch a single trusted keyDown+keyUp pair to whatever element
+// currently has DOM focus. Pairs with `focus <name>` for the common SPA
+// pattern of "focus this row, press Enter to activate it" \u2014 LinkedIn's
+// conversation list being the motivating case.
+const KEY_MODIFIER_BITS: Record<string, number> = { alt: 1, ctrl: 2, meta: 4, cmd: 4, shift: 8 };
+
+async function handleKey(args: string[]): Promise<string> {
+  ensureInsideTab();
+
+  const pa = parseArgs(args);
+  if (pa.positional.length === 0) {
+    return "\x1b[31mUsage: key <KeyName> [--modifiers ctrl,shift,\u2026] (see key --help)\x1b[0m";
+  }
+
+  const keyName = pa.positional[0];
+  const modifiersArg = pa.named["--modifiers"] ?? "";
+  let modifiers = 0;
+  for (const m of modifiersArg.split(",").map(s => s.trim().toLowerCase()).filter(Boolean)) {
+    const bit = KEY_MODIFIER_BITS[m];
+    if (bit === undefined) return `\x1b[31mkey: unknown modifier '${m}' (use any of: alt, ctrl, meta/cmd, shift)\x1b[0m`;
+    modifiers |= bit;
+  }
+
+  await cdp.dispatchKey(keyName, modifiers);
+  treeStale = true;
+  const modNote = modifiers ? ` (modifiers: ${modifiersArg})` : "";
+  return `\x1b[32m\u2713 Sent key: ${keyName}${modNote}\x1b[0m\r\n\x1b[90m(tree will auto-refresh on next command)\x1b[0m`;
 }
 
 // ---- submit (atomic form interaction) ----

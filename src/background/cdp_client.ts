@@ -190,30 +190,26 @@ export class CDPClient {
    * `modifiers` is a CDP modifier bitmask: Alt=1, Ctrl=2, Meta=4, Shift=8.
    */
   async dispatchKey(key: string, modifiers: number = 0): Promise<void> {
+    // Bring the tab to the front of its window before dispatching. Chrome's
+    // chrome.debugger.sendCommand path silently drops Input.dispatchKeyEvent
+    // when the target tab isn't the active tab in a focused window — the CDP
+    // call returns success ({}), but the renderer never fires keydown. Mouse
+    // events are exempt because they carry explicit coordinates and Chrome
+    // hit-tests by position; keys have no coordinates and depend on focus.
+    // No stealth-focus API exists; this is the canonical fix. Page.bringToFront
+    // is a no-op on chrome:// pages (where keys wouldn't work anyway) — swallow
+    // any error so a key dispatch failure surfaces visibly rather than being
+    // pre-empted by the bringToFront. (#40)
+    try {
+      await this.send("Page.bringToFront");
+    } catch { /* tab is undebuggable for bringToFront; let the dispatch error speak */ }
+
     const params = keyEventParams(key, modifiers);
     // If the helper attached `text`, the down event is a text-producing keyDown;
     // otherwise it's a rawKeyDown (special key, no text).
     const downType = "text" in params ? "keyDown" : "rawKeyDown";
-
-    // Diagnostic: while we run down the "key reports ✓ but no event reaches
-    // the page" issue, log each leg of the dispatch into the service worker
-    // console so we can tell whether the CDP call ran, what it returned, and
-    // whether the keyUp fired. Strip after the symptom is resolved. (#40)
-    console.log("[key.dispatch] target tab:", this.attachedTabId, "down:", downType, "params:", params);
-    try {
-      const downResp = await this.send("Input.dispatchKeyEvent", { type: downType, ...params });
-      console.log("[key.dispatch] down response:", downResp);
-    } catch (err: any) {
-      console.error("[key.dispatch] down threw:", err?.message ?? err);
-      throw err;
-    }
-    try {
-      const upResp = await this.send("Input.dispatchKeyEvent", { type: "keyUp", ...params });
-      console.log("[key.dispatch] up response:", upResp);
-    } catch (err: any) {
-      console.error("[key.dispatch] up threw:", err?.message ?? err);
-      throw err;
-    }
+    await this.send("Input.dispatchKeyEvent", { type: downType, ...params });
+    await this.send("Input.dispatchKeyEvent", { type: "keyUp", ...params });
   }
 
   /**

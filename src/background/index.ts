@@ -1109,6 +1109,11 @@ const COMMAND_HELP: Record<string, string> = {
     "whatever element currently has DOM focus. Use after `focus <name>` for",
     "SPAs that listen for Enter/Escape/arrow keys rather than click.",
     "",
+    "\x1b[33mNote:\x1b[0m the target tab is brought to the front of its window before",
+    "dispatch — Chrome silently drops key events to background tabs. Clicks are",
+    "unaffected by this. A burst of keys in the same tab only costs the focus",
+    "shift once.",
+    "",
     "\x1b[33mCommon keys:\x1b[0m",
     "  Enter Escape Tab Backspace Delete Space",
     "  ArrowUp ArrowDown ArrowLeft ArrowRight",
@@ -4151,9 +4156,7 @@ async function handleKey(args: string[]): Promise<string> {
     modifiers |= bit;
   }
 
-  console.log("[handleKey] entering dispatch for", keyName, "modifiers=", modifiers, "activeTab=", state.activeTabId);
   await cdp.dispatchKey(keyName, modifiers);
-  console.log("[handleKey] dispatch returned");
   treeStale = true;
   const modNote = modifiers ? ` (modifiers: ${modifiersArg})` : "";
   return `\x1b[32m\u2713 Sent key: ${keyName}${modNote}\x1b[0m\r\n\x1b[90m(tree will auto-refresh on next command)\x1b[0m`;

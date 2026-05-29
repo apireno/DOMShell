@@ -79,6 +79,8 @@ Full experiment data: [experiments/claude_domshell_vs_cic](https://github.com/ap
 
 **Default (recommended): the single `domshell_execute` tool.** Pass any DOMShell command as a string — `"ls"`, `"cd tabs/123"`, `"open https://example.com"` — or pass several newline-separated for a whole workflow in one call. One tool, one approval, the full command vocabulary in the tool description.
 
+**Multi-line semantics:** when `command` contains newlines, each line runs in order **in the same MCP session and lane**, so `cwd`, env, and history persist between lines. An error on one line does **not** halt the rest — its message is included in the combined output and subsequent lines still run. This is the right shape for cleanup-line idioms like `"cd path\ngrep pattern\ncd back"`: the trailing restore runs even if the middle step errors. Implementation: [`mcp-server/index.ts:1115-1136`](./index.ts#L1115-L1136).
+
 **Lanes & multi-agent.** Every reply ends with `[lane: <id>]`. Multiple MCP clients can connect simultaneously, each in its own isolated Chrome tab group. To carve sub-lanes within a single client (e.g. two Claude Desktop chats), pass `group_id: "new"` on the first call and carry the returned id thereafter. See [CHANGELOG.md](./CHANGELOG.md).
 
 ### Granular mode — `--granular`

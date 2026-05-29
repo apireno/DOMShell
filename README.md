@@ -1060,6 +1060,8 @@ text")
 
 One round-trip instead of three, and fewer tool-call cycles.
 
+**Multi-line semantics.** Each line runs in order **in the same MCP session and lane**, so `cwd`, env, and history persist between lines (the second line's `cd main` is relative to the first line's freshly-opened tab). An error on any single line does **not** halt the rest — its error message is included in the combined output and subsequent lines still run. That's the right shape for cleanup-line idioms like `"cd path\ngrep pattern\ncd back"` where the trailing restore must run even if the middle step errors. Implementation: [`mcp-server/index.ts:1115-1136`](mcp-server/index.ts#L1115-L1136).
+
 **Two modes:**
 
 | Mode | Tools exposed | Use when |

@@ -379,7 +379,7 @@ async function execWithSecurity(
 const MCP_INSTRUCTIONS = `DOMShell gives you full browser control through a filesystem metaphor. The DOM's Accessibility Tree (AXTree) is mapped to directories (containers like navigation/, main/, form/) and files (interactive elements like submit_btn, search_input, login_link). The browser itself (windows, tabs) is also part of the hierarchy.
 
 INTERFACE — ONE TOOL
-You drive DOMShell through a single tool: domshell_execute. Pass a command string ("ls", "cd tabs/123", "text main"). To run a whole workflow in ONE call, pass MULTIPLE commands separated by newlines — each line runs in order and the combined output is returned:
+You drive DOMShell through a single tool: domshell_execute. Pass a command string ("ls", "cd tabs/123", "text main"). To run a whole workflow in ONE call, pass MULTIPLE commands separated by newlines — each line runs in order and the combined output is returned. Lines share session/lane state (cwd, env, history persist between lines), and an error on one line does NOT halt the rest — its message is included in the combined output and subsequent lines still run. That's the right shape for cleanup-line idioms like "cd path \\n grep pattern \\n cd back".
   domshell_execute("open https://example.com\\ncd main\\ntext")
 Most commands accept relative paths, so you rarely need a separate cd: "text main/article", "click form/submit_btn".
 NAMING NOTE: this guide sometimes writes a command as "domshell_<name>" (e.g. domshell_text) — that simply means the "<name>" command (e.g. "text"). Run any command via domshell_execute, e.g. domshell_execute("text main"). (If the server was started with --granular, each command is ALSO exposed as its own domshell_<name> tool — but domshell_execute is the primary, recommended interface.)
@@ -1088,6 +1088,7 @@ Send ONE command, or MULTIPLE commands separated by newlines to run a whole work
   open https://example.com
   cd main
   text
+Multi-line runs each command in order in the same session/lane (cwd, env, history all persist between lines). An error on one line does NOT halt execution — its error is included in the combined output and subsequent lines still run. Useful for cleanup-line idioms like "cd path \\n grep pattern \\n cd back" where the trailing restore must run even if the middle step errors.
 The pipe operator works within a command: find --type link --meta | grep github
 Most commands accept relative paths, so a separate cd is rarely needed: text main/article, click form/submit_btn.
 

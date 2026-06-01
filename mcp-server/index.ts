@@ -397,9 +397,10 @@ Every domshell_execute reply ends with a "[lane: <id>]" line — your current la
 Your MCP connection gets its OWN lane automatically. You typically need nothing more — just call domshell_execute and the default lane handles it.
 
 When you need MULTIPLE lanes — parallel tasks, or you share one MCP connection with another agent (Claude Desktop multiplexes every chat over one connection, so two chats would land in one lane by default) — use the group_id parameter on domshell_execute:
-  • group_id "new"  → create a fresh isolated lane. Its id comes back in the [lane:] line. Carry that id on every later call.
-  • group_id "<id>" → join the lane with that id. HANDOFF: another agent can give you its lane id to continue its work in the same state.
-  • group_id omitted → stay in your current lane (never spawns, never switches).
+  • group_id "new"        → create a fresh isolated lane. Its id comes back in the [lane:] line. Carry that id on every later call.
+  • group_id "shared"     → explicitly opt into the default per-connection lane (shared across any agents multiplexing this MCP connection — Claude Desktop does this — but still isolated from the user's regular tabs).
+  • group_id "<id>"       → join the lane with that numeric id. HANDOFF: another agent can give you its lane id to continue its work in the same state.
+  • group_id omitted      → DEPRECATED. Currently maps to the shared lane and emits a [DEPRECATION] warning in the reply. A future major release will require an explicit group_id. Migrate by passing "new", "shared", or a numeric id explicitly on every call.
 
 CLEAN UP YOUR LANES WHEN YOU FINISH
 If you CREATED a lane (you passed group_id "new"), CLOSE IT when your task is done — run command "group close" with that same group_id. Don't leave orphan tab groups for the user to clean up.
@@ -1103,18 +1104,28 @@ NOTES
 - Enter a tab with "cd tabs/<id>" from the browser root; "open <url>" already opens AND enters a new tab (no flags).
 - "cd .." moves up one level; from a tab's root it exits to the browser level.
 - Run "help" for the full command list, or "<command> --help" for one command's usage.
-- LANES: every reply ends with "[lane: <id>]" — your current lane. group_id "new" creates a fresh lane (its id comes back); group_id "<id>" joins that lane (handoff); omit group_id to stay in your current one.
+- LANES: every reply ends with "[lane: <id>]" — your current lane. Declare your intent explicitly via group_id: "new" creates a fresh lane (the id comes back; carry it forward), "shared" opts into the default per-connection lane (shared across multiplexed clients on the same MCP connection but still isolated from the user's tabs), "<numeric-id>" joins that lane (handoff). Omitting group_id is DEPRECATED — currently maps to the shared lane and emits a [DEPRECATION] warning; future major release will require it.
 - CLEAN UP: if you CREATED a lane (group_id "new"), close it when your task ends — run "group close" with the SAME group_id. Don't leave orphan tab groups behind. For the default lane (you did not create it), ask the user first; only close on their say-so.
 - Write and sensitive commands obey the server's security tiers.`,
     {
       command: z.string().describe("A DOMShell command, or multiple commands separated by newlines (e.g. 'ls -l' or 'open example.com\\ncd main\\ntext')"),
-      group_id: z.string().optional().describe("Which session lane to run in. Omit to stay in your current lane; pass \"new\" to create a fresh isolated lane; or pass a lane id to join an existing one (e.g. to continue a session another agent started). Every response ends with a '[lane: <id>]' line — pass that id back as group_id to stay in the same lane."),
+      group_id: z.string().optional().describe("Which session lane to run in. Pass \"new\" to create a fresh isolated lane, \"shared\" to explicitly opt into the default per-connection lane (shared across any multiplexed clients on this MCP connection, still isolated from the user's tabs), or a numeric lane id to join an existing lane (handoff). Every response ends with a '[lane: <id>]' line — pass that id back as group_id to stay in the same lane. NOTE: omitting group_id is DEPRECATED — currently maps to the shared lane but will be required in a future major release."),
     },
     ANNO_WRITE,
     async ({ command, group_id }) => {
+      // group_id resolution:
+      //   undefined        → shared lane + DEPRECATION warning (agent hasn't declared intent)
+      //   "shared"         → shared lane, no warning (explicit opt-in; map to undefined for kernel)
+      //   "new"            → create new auto-id lane (unchanged)
+      //   numeric "<id>"   → join existing lane by Chrome group id (unchanged)
+      //
+      // Future 3.0.0 will require an explicit group_id and reject undefined.
+      const wasImplicitShared = group_id === undefined;
+      const resolvedGroupId = group_id === "shared" ? undefined : group_id;
+
       // Multi-command: each non-blank line runs in sequence (ADR-002 D3).
       const lines = command.split("\n").map((l) => l.trim()).filter(Boolean);
-      let lane = group_id;
+      let lane = resolvedGroupId;
       let laneId: string | null = null;
       const out: string[] = [];
       for (const line of lines) {
@@ -1126,7 +1137,43 @@ NOTES
         // the remaining commands run in the same lane, not a new one each time.
         if (lane === "new" && r.laneId) lane = r.laneId;
       }
-      out.push(`\n[lane: ${laneId ?? "shared"}]`);
+
+      // Deprecation warning when the agent omitted group_id entirely — they
+      // landed in the shared lane by accident, not declaration. Will become
+      // a hard error in 3.0.0. Bracketed keyword matches DOMShell's existing
+      // [lane: ...] marker style for parser-friendliness. Warning still fires
+      // on lane-resolution failure too — the agent's group_id choice is
+      // independent of whether the call landed.
+      if (wasImplicitShared) {
+        out.push("");
+        out.push(
+          '[DEPRECATION] group_id omitted — running in the shared per-connection lane. ' +
+          'Pass group_id="new" to create a private lane, or "shared" to ' +
+          'explicitly opt into this lane. Future major release will require ' +
+          'an explicit group_id.'
+        );
+      }
+
+      // [lane: ...] marker — omitted ONLY when lane resolution itself
+      // failed. The kernel returns laneId=null when an unknown group_id
+      // is passed (or "new" creation failed) — see src/background/index.ts:589.
+      // Command-level errors (cd: No tab matching, focus: No such element,
+      // etc.) still ran inside a real lane and keep the marker — the agent
+      // needs to know which lane to continue in for the next call.
+      //
+      // Label: when the agent asked for the shared/default lane (omitted
+      // group_id or "shared"), emit the keyword `shared` rather than the
+      // kernel's numeric id. The kernel assigns every MCP connection its
+      // own isolated tab group at SESSION_START (ADR-001 D3), so the
+      // "default lane" does have a real numeric id — but the agent's handle
+      // for it is `shared`, not the id. For agent-named lanes ("new" /
+      // numeric handoff), echo the kernel's id so the agent can carry it.
+      const laneResolutionFailed =
+        resolvedGroupId !== undefined && laneId === null;
+      if (!laneResolutionFailed) {
+        const label = resolvedGroupId === undefined ? "shared" : (laneId ?? "shared");
+        out.push(`\n[lane: ${label}]`);
+      }
       // The lane id rides in the text content, NOT structuredContent — Claude
       // Desktop renders only structuredContent when present and suppresses the
       // text entirely. The text is the one channel every client surfaces.

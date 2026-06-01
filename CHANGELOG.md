@@ -3,6 +3,30 @@
 Notable changes to DOMShell — the Chrome extension and the `@apireno/domshell` MCP server.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The two artifacts version independently.
 
+## MCP server `2.0.2` — 2026-05-31
+
+Server-only patch. No Chrome extension changes; the extension stays at `1.3.1`.
+
+### Deprecated — MCP server (`2.0.2`)
+
+- **Omitting `group_id` on `domshell_execute` is now deprecated.** Calls without a `group_id` continue to work as before (mapped to the default per-connection lane) but the response now includes a one-line `[DEPRECATION]` warning. A future major release will require an explicit `group_id`. Migrate by passing one of:
+  - `"new"` — create a fresh isolated lane (recommended for most agents)
+  - `"shared"` — explicitly opt in to the default per-connection lane (silent; no warning)
+  - `"<numeric-id>"` — join an existing lane (handoff)
+  - Behavioral motivation: agents have been landing in the default lane by accident rather than declaration. Multi-chat-per-MCP-client scenarios (Claude Desktop multiplexes every chat over one MCP connection) cause silent collisions. The deprecation cycle gives integrators visible notice before the hard switch in `3.0.0`. The change is non-breaking — every existing caller continues to work, just with a warning attached when `group_id` is omitted.
+
+### Added — MCP server (`2.0.2`)
+
+- **`group_id="shared"` accepted as explicit opt-in** to the default per-connection lane (the one multiplexed clients share). Semantically identical to omitting `group_id` (server translates `"shared"` to undefined before passing to the kernel) but no deprecation warning is emitted, because the agent has declared intent. The lane label in the response is also now the keyword `shared` rather than the kernel's numeric tab-group id, giving the agent a stable handle that survives across calls.
+
+### Fixed — MCP server (`2.0.2`)
+
+- **`[lane: ...]` marker no longer appended on lane-resolution failure.** When `group_id` named a lane that didn't exist (or `"new"` creation failed), the response previously ended with `[lane: shared]`, which falsely implied the agent had landed in the shared lane when in fact the call hadn't run anywhere. The marker is now suppressed only in this specific case — detected by checking whether the agent named a specific lane (`group_id !== undefined`) and the kernel returned `laneId: null`. Command-level errors (`cd: No tab matching ...`, `focus: No such element`, domain allowlist rejections, etc.) keep the marker, because they ran inside a real lane and the agent needs to know which lane to continue in for the next call. Successful responses unchanged.
+
+### Future work
+
+Named lanes (e.g. `group_id="my-task-name"` with get-or-create semantics and human-readable Chrome tab group titles) require kernel-side changes — `swapToAgentLane()` currently rejects non-numeric strings, and `createAgentLane()` doesn't accept user-supplied names. Tracked separately; will bundle with a future Chrome extension update.
+
 ## MCP server `2.0.1` · Chrome extension `1.3.1` — 2026-05-26
 
 Patch release sweeping up four bugs found while exercising 1.3.0/2.0.0 against real-world SPAs (LinkedIn, in particular). No new permissions on either artifact — Chrome Web Store re-review is code-only.

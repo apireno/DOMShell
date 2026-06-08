@@ -9,14 +9,23 @@
     "source": "github",
     "subfolder": "mcp-server"
   },
-  "version": "2.0.2",
+  "version": "2.0.3",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@apireno/domshell",
-      "version": "2.0.2",
+      "version": "2.0.3",
       "transport": {
         "type": "stdio"
+      }
+    },
+    {
+      "registryType": "npm",
+      "identifier": "@apireno/domshell",
+      "version": "2.0.3",
+      "transport": {
+        "type": "streamable-http",
+        "url": "http://localhost:3001/mcp"
       }
     }
   ]

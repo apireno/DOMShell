@@ -41,7 +41,10 @@ Nexa's existing [Web-Agent-Qwen3VL](https://github.com/NexaAI/nexa-sdk/tree/main
 ## Prerequisites
 
 1. **DOMShell Chrome extension** installed and running
-2. **DOMShell MCP server** running (`cd mcp-server && npx tsx index.ts --no-confirm --allow-all`)
+2. **DOMShell MCP server** running on `http://127.0.0.1:3001/mcp` — via any of the three install paths:
+   - Dev mode (the example below uses this): `cd mcp-server && npx tsx index.ts --no-confirm --allow-all`
+   - Published native: `npx @apireno/domshell --no-confirm --allow-write --token <token>`
+   - Dockerized (Path 2 / Path 3): see [`docs/deploy/container-and-toolhive.md`](../../docs/deploy/container-and-toolhive.md)
 3. **nexa-sdk** installed: see [nexa-sdk installation](https://github.com/NexaAI/nexa-sdk#installation)
 4. **Node.js** and **npm** (for the MCP proxy)
 5. **Python 3.10+**

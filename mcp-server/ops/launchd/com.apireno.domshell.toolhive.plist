@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  DOMShell ToolHive autostart (macOS launchd LaunchAgent).
+
+  Restores the ToolHive-managed MCP workloads (including DOMShell) after a
+  reboot/login. ToolHive's proxy is a host process that does NOT survive
+  reboot, so this one-shot agent waits for the Docker socket then runs
+  `thv restart --all` (see ../toolhive/toolhive-autostart.sh).
+
+  REQUIRES: Docker Desktop set to "Start Docker Desktop when you log in"
+  (Docker Settings → General). This agent only RESTORES ToolHive; it
+  cannot start Docker itself.
+
+  INSTALL (one-time, from the mcp-server/ directory in this repo):
+    # Adapt the ProgramArguments path below to point at YOUR clone of the
+    # toolhive-autostart.sh script. Then:
+    cp ops/launchd/com.apireno.domshell.toolhive.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.apireno.domshell.toolhive.plist
+
+  STATUS / LOGS:
+    launchctl list | grep apireno.domshell.toolhive
+    tail -f /tmp/domshell-toolhive-autostart.log
+
+  UNINSTALL:
+    launchctl unload ~/Library/LaunchAgents/com.apireno.domshell.toolhive.plist
+    rm ~/Library/LaunchAgents/com.apireno.domshell.toolhive.plist
+
+  NOTE: If you already have another ToolHive autostart agent loaded (e.g.
+  from a sibling MCP-server project), you don't need this one — `thv
+  restart --all` operates globally and any single agent restores every
+  workload. Two agents loaded simultaneously is harmless (idempotent) but
+  redundant.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.apireno.domshell.toolhive</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <!--
+          REPLACE the path below with the absolute path to your clone of
+          DOMShell/mcp-server/ops/toolhive/toolhive-autostart.sh. launchd
+          does NOT expand $HOME or relative paths here.
+        -->
+        <string>/REPLACE/WITH/ABSOLUTE/PATH/TO/DOMShell/mcp-server/ops/toolhive/toolhive-autostart.sh</string>
+    </array>
+
+    <!-- one-shot restore at login; NOT KeepAlive (it is not a daemon) -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <!-- Adapt if your homebrew prefix differs (e.g. /usr/local on Intel Macs) -->
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/domshell-toolhive-autostart.out</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/domshell-toolhive-autostart.err</string>
+</dict>
+</plist>

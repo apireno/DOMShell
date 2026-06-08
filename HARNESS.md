@@ -63,6 +63,8 @@ Start the server manually for this mode:
 npx @apireno/domshell --allow-write --no-confirm --mcp-port 3001
 ```
 
+> **Other install paths.** The integration shape is the same regardless of how the DOMShell server is running. Besides this default `npx` invocation, you can also reach a `docker compose`-managed or `thv`-managed DOMShell on the same `http://localhost:3001/mcp` endpoint. See [`mcp-server/README.md`](./mcp-server/README.md#install) for the three-paths overview and [`docs/deploy/container-and-toolhive.md`](./docs/deploy/container-and-toolhive.md) for the container deep dive.
+
 ## State Model
 
 DOMShell maintains state that persists across tool calls within a session:

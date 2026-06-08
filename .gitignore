@@ -43,6 +43,7 @@ npm-debug.log*
 
 experiments/*/results
 *.mov
-docs/
+docs/*
+!docs/deploy/
 .cto-path
 .cto-path.example

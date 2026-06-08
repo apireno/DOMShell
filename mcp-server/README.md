@@ -6,15 +6,64 @@ DOMShell maps Chrome's Accessibility Tree to a virtual filesystem. Every DOM ele
 
 ## Install
 
+DOMShell supports **three install paths** — pick whichever fits your setup. **Path 1 is the documented default** and what 99% of users want; Paths 2 and 3 exist if you want lifecycle management across several MCP servers.
+
+### Path 1 — Native CLI (default, simplest)
+
 ```bash
 npm install -g @apireno/domshell
 ```
 
-Or run directly:
+Or run directly without installing:
 
 ```bash
 npx @apireno/domshell
 ```
+
+Works on macOS, Linux, and Windows with Node 18+. Nothing else required.
+
+### Path 2 — Dockerized (optional)
+
+Run DOMShell in a container — useful if you don't want a global Node install or you want process isolation. Requires Docker Desktop. The token is persisted to a gitignored `.env` file so it survives container restarts and host reboots:
+
+```bash
+git clone https://github.com/apireno/DOMShell && cd DOMShell/mcp-server
+cp .env.example .env
+# Edit .env and set DOMSHELL_TOKEN to: $(openssl rand -hex 24)
+docker compose build      # produces domshell-mcp-server:latest
+docker compose up -d
+docker compose logs -f
+```
+
+The container maps ports `3001` (MCP HTTP) and `9876` (WebSocket bridge to the Chrome extension) to your loopback interface, so the Chrome extension reaches it exactly as it would the native install. `restart: unless-stopped` brings the container back automatically when Docker Desktop starts (toggle "Start Docker Desktop when you log in" in Docker Settings to make Path 2 fully reboot-resilient).
+
+### Path 3 — ToolHive-managed (optional)
+
+Use [ToolHive](https://github.com/stacklok/toolhive) (`thv`) to manage the container's lifecycle alongside any other MCP servers you're running. Same `.env` file Path 2 uses, just sourced by thv:
+
+```bash
+brew tap stacklok/tap && brew install thv      # one-time
+cd DOMShell/mcp-server
+cp .env.example .env       # edit DOMSHELL_TOKEN if you haven't already
+docker compose build       # produces domshell-mcp-server:latest
+
+thv run \
+  --name domshell-mcp-server \
+  --transport streamable-http \
+  --target-port 3001 \
+  -p 9876:9876 \
+  --env-file .env \
+  domshell-mcp-server:latest
+
+thv list                          # workload status (URL on the proxy port)
+thv logs domshell-mcp-server      # tail logs
+```
+
+The container is reachable on `http://127.0.0.1:3001/mcp` because `--target-port 3001` auto-publishes that port to host loopback — your existing MCP client config (Claude Desktop, Cursor, …) keeps working without changes.
+
+Path 3 needs a one-time launchd agent for reboot autostart (Path 2 survives reboot through Docker Desktop alone). Full reboot table, launchd plist template, autostart script, and a simulated-reboot verification: [`docs/deploy/container-and-toolhive.md`](../docs/deploy/container-and-toolhive.md).
+
+### Chrome extension (required for all three paths)
 
 You also need the [DOMShell Chrome Extension](https://pireno.com/domshell) — the MCP server talks to the browser through it.
 

@@ -1,0 +1,33 @@
+# Keep the image lean and never bake secrets into a layer.
+# (FLEET-ADR-001: config is injected at runtime, never baked.)
+
+# VCS / editor noise
+.git
+.gitignore
+.gitattributes
+*.swp
+.DS_Store
+
+# Build artifacts the Dockerfile produces fresh
+node_modules
+dist
+
+# MCP-registry auth tokens — SECURITY: never commit / never bake.
+# The mcp-publisher CLI writes these next to the package.
+.mcpregistry_*
+
+# Audit log from local runs — runtime data, not source.
+audit.log
+*.log
+
+# Tests + docs the runtime image doesn't need
+tests
+__tests__
+*.test.ts
+*.test.js
+*.md
+
+# Anything an integrator might have left lying around
+.env
+.env.*
+*.local

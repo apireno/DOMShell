@@ -855,7 +855,19 @@ After building, reload the extension on `chrome://extensions/` and reopen the si
 
 DOMShell includes a hardened MCP server that lets any MCP-compatible client control the browser through DOMShell commands. The server runs as a standalone HTTP service — multiple clients can connect simultaneously.
 
-### Install via npm (Recommended)
+### Three install paths
+
+DOMShell's MCP server supports **three install paths** — pick whichever matches your setup. Path 1 is the documented default and what most users want. Paths 2 and 3 are optional and exist for users who want container isolation or lifecycle management.
+
+| Path | What you run | Reboot behavior | When to pick it |
+|---|---|---|---|
+| **1. Native (npx)** | `npx @apireno/domshell --allow-write --token <token>` | Survives naturally — MCP client (Claude Desktop, Cursor, …) spawns it on demand | You want the simplest install — no Docker, no extra tooling |
+| **2. Dockerized (compose)** | `docker compose up -d` from `mcp-server/` with a `.env` file | Survives with Docker Desktop's "Start at login" toggle (`restart: unless-stopped`) | You want container isolation but don't need a multi-MCP supervisor |
+| **3. ToolHive-managed (thv)** | `thv run` + a one-time launchd autostart agent | Survives via launchd → `thv restart --all` | You're running multiple MCP servers and want one place to `thv list` / `thv logs` them all |
+
+Full Path 2 / Path 3 instructions (build, `.env` install pattern, launchd autostart template, reboot recovery): **[`docs/deploy/container-and-toolhive.md`](docs/deploy/container-and-toolhive.md)**. The rest of this README covers Path 1 — the simplest and recommended default.
+
+### Install via npm (Path 1 — default)
 
 ```bash
 npm install -g @apireno/domshell

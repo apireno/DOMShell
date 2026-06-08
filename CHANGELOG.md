@@ -3,6 +3,27 @@
 Notable changes to DOMShell — the Chrome extension and the `@apireno/domshell` MCP server.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The two artifacts version independently.
 
+## MCP server `2.0.3` — 2026-06-08
+
+Server-only patch. No Chrome extension changes; the extension stays at `1.3.1`. Adds an optional container + ToolHive install path alongside the existing native stdio install — both coexist; stdio remains the documented default.
+
+### Added — MCP server (`2.0.3`)
+
+- **Optional Dockerized + ToolHive install paths** (Path 2 and Path 3 in the new three-option matrix). The default native install (`npx @apireno/domshell` over stdio, Path 1) is **unchanged and remains the documented default**. New deliverables:
+  - `mcp-server/Dockerfile` — `node:20-slim`, non-root, healthcheck, runs `dist/index.js`. Build context is `mcp-server/`.
+  - `mcp-server/docker-compose.yml` — direct dockerized run for Path 2.
+  - `mcp-server/.dockerignore` — excludes `.git`, `node_modules`, `dist`, `.mcpregistry_*` tokens, audit logs.
+  - `docs/deploy/container-and-toolhive.md` — three-options framing, ToolHive recipe, reboot autostart pointers, end-to-end verification.
+- **`DOMSHELL_MCP_HOST` env var (and `--host` flag)** for the listener bind address on both the HTTP MCP server (port 3001) and the WebSocket bridge to the Chrome extension (port 9876). **Defaults to `127.0.0.1`**, preserving exact 2.0.2 behavior for every existing native installation. The Dockerfile sets `DOMSHELL_MCP_HOST=0.0.0.0` so port mapping can reach the listener inside a container. **Do not set `0.0.0.0` outside a container or sandboxed VM** — it exposes DOMShell to your LAN; the audit log + token are still the security boundary but loopback binding is the right default for native installs.
+- **`DOMSHELL_TOKEN` env var** read as a fallback after the `--token` flag. Lets the `.env` install pattern (used by both Compose and ToolHive's `--env-file`) carry the auth token without command-line interpolation. Random-fallback unchanged for first-time `npx` users with no token set.
+- **`DOMSHELL_MCP_PORT` / `DOMSHELL_WS_PORT` env vars** read as fallbacks for the HTTP and WS ports. `MCP_PORT` (the generic name ToolHive injects per workload from its dynamic port allocator) is also read for the HTTP port so the thv-managed path works out of the box. Defaults remain 3001 / 9876.
+- **`streamable-http` transport now declared in `server.json`** alongside `stdio`, so the MCP registry advertises both. Stdio stays first / canonical; HTTP transport is opt-in via the container path. No behavior change for existing consumers (they were already on stdio).
+
+### Notes — MCP server (`2.0.3`)
+
+- Pure additive release. No deprecation, no breaking change. The single code-side delta is the bind-host env var; everything else is new files in `mcp-server/` and `docs/deploy/`.
+- HKUDS/CLI-Anything PR #308 merged on 2026-06-08 with a HARNESS.md floor of `2.0.2`. Their `npx @apireno/domshell` invocation auto-pulls latest, so they'll silently get 2.0.3 with zero changes required — the new env var is opt-in and their default-loopback usage is unaffected.
+
 ## MCP server `2.0.2` — 2026-05-31
 
 Server-only patch. No Chrome extension changes; the extension stays at `1.3.1`.

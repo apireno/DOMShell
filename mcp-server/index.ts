@@ -34,8 +34,38 @@ const ALLOW_SENSITIVE = hasFlag("--allow-sensitive") || hasFlag("--allow-all");
 const NO_CONFIRM = !hasFlag("--confirm");
 const EXPOSE_COOKIES = hasFlag("--expose-cookies");
 const GRANULAR = hasFlag("--granular");  // expose the 38 per-command tools (ADR-002 D2)
-const PORT = parseInt(getFlagValue("--port", "9876"), 10);
-const MCP_PORT = parseInt(getFlagValue("--mcp-port", "3001"), 10);
+// Port precedence: --port / --mcp-port flag wins, then our DOMSHELL_*
+// env vars, then the generic MCP_PORT / PORT names ToolHive injects
+// when it runs the container (target-port → random allocation passed
+// as MCP_PORT env var; see toolhive runconfig spec), then default.
+// This lets the container honour either docker compose (which sets
+// DOMSHELL_MCP_PORT from the Dockerfile's ENV) or thv (which injects
+// MCP_PORT directly) without per-deployment config drift.
+const PORT = parseInt(
+  getFlagValue("--port", "") ||
+    process.env.DOMSHELL_WS_PORT ||
+    "9876",
+  10
+);
+const MCP_PORT = parseInt(
+  getFlagValue("--mcp-port", "") ||
+    process.env.DOMSHELL_MCP_PORT ||
+    process.env.MCP_PORT ||
+    "3001",
+  10
+);
+// Bind address — defaults to loopback (127.0.0.1) so the server is reachable
+// only from the same machine running it (the safe default for native installs).
+// Precedence: --host flag (easiest to flip for one-off debugging) wins, then
+// DOMSHELL_MCP_HOST env var (conventional way the Dockerfile injects
+// 0.0.0.0 inside a container), then loopback default. Never set 0.0.0.0
+// on a native install unless you explicitly want to expose DOMShell to
+// your LAN (security risk: anyone on the network could drive the server
+// with a valid token).
+const HOST =
+  getFlagValue("--host", "") ||
+  process.env.DOMSHELL_MCP_HOST ||
+  "127.0.0.1";
 const LOG_FILE = getFlagValue("--log-file", "audit.log");
 const ALLOWED_DOMAINS = getFlagValue("--domains", "")
   .split(",")
@@ -44,7 +74,17 @@ const ALLOWED_DOMAINS = getFlagValue("--domains", "")
 
 // ---- Auth Token ----
 
-const AUTH_TOKEN = getFlagValue("--token", "") || randomBytes(24).toString("hex");
+// Auth token — precedence: --token flag (easiest to flip for one-off
+// debugging) wins, then DOMSHELL_TOKEN env var (conventional way the
+// .env file injects it for Path 2 / Path 3 container installs), then
+// fall back to a randomly-generated token printed at startup. The
+// random fallback is for first-time `npx` users; persistent installs
+// should always pin the token via flag or env so the Chrome extension
+// can keep its saved `connect <token>` working across restarts.
+const AUTH_TOKEN =
+  getFlagValue("--token", "") ||
+  process.env.DOMSHELL_TOKEN ||
+  randomBytes(24).toString("hex");
 
 // ---- Logging ----
 
@@ -200,7 +240,7 @@ const pendingRequests = new Map<
   }
 >();
 
-const wss = new WebSocketServer({ port: PORT, host: "127.0.0.1" });
+const wss = new WebSocketServer({ port: PORT, host: HOST });
 
 wss.on("error", (err: NodeJS.ErrnoException) => {
   if (err.code === "EADDRINUSE") {
@@ -214,7 +254,7 @@ wss.on("error", (err: NodeJS.ErrnoException) => {
 });
 
 wss.on("listening", () => {
-  log(`WebSocket bridge listening on ws://127.0.0.1:${PORT}`);
+  log(`WebSocket bridge listening on ws://${HOST}:${PORT}`);
 });
 
 wss.on("connection", (ws, req) => {
@@ -1324,10 +1364,10 @@ async function main() {
   });
 
   // Start HTTP server
-  const httpServer = app.listen(MCP_PORT, "127.0.0.1", () => {
+  const httpServer = app.listen(MCP_PORT, HOST, () => {
     log("");
-    log(`MCP HTTP endpoint: http://127.0.0.1:${MCP_PORT}/mcp`);
-    log(`WebSocket bridge:  ws://127.0.0.1:${PORT}`);
+    log(`MCP HTTP endpoint: http://${HOST}:${MCP_PORT}/mcp`);
+    log(`WebSocket bridge:  ws://${HOST}:${PORT}`);
     log(`Auth token: ${AUTH_TOKEN}`);
     log("");
     log("In the DOMShell terminal, run:");

@@ -1,0 +1,74 @@
+# DOMShell MCP server — optional dockerized run (Path 2 of 3).
+#
+# Path 1 (default, simple): `npx @apireno/domshell` over stdio.
+# Path 2 (this file):       docker compose up — direct container.
+# Path 3 (ToolHive-managed): `thv run` the same image. See
+#                           docs/deploy/container-and-toolhive.md.
+#
+# Install (one-time):
+#   cd mcp-server
+#   cp .env.example .env       # then edit DOMSHELL_TOKEN to a real value
+#   docker compose build
+#   docker compose up -d
+#   docker compose logs -f
+#
+# Tear down:
+#   docker compose down
+
+# Project name shown in Docker Desktop ("DOMShell MCP server" in the
+# Containers list). Overrides Compose's default of inferring from the
+# directory name (`mcp-server`).
+name: domshell-mcp-server
+
+services:
+  domshell-mcp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: domshell-mcp-server:latest
+    container_name: domshell-mcp-server
+    # Auto-restart on Docker daemon restart (e.g. after host reboot, IF
+    # Docker Desktop is set to launch at login). Together with Docker
+    # Desktop's "Start at login" toggle this gives Path 2 the same
+    # reboot-survives-naturally story Path 1 has via Claude Desktop's
+    # spawn-on-demand. See docs/deploy/container-and-toolhive.md for the
+    # complete reboot table.
+    restart: unless-stopped
+
+    # Port mapping — host:container. The Chrome extension reaches the
+    # WS bridge through 127.0.0.1:9876 on the host; MCP clients reach
+    # the HTTP endpoint through 127.0.0.1:3001 on the host. Inside the
+    # container both listeners bind 0.0.0.0 (set by Dockerfile ENV).
+    ports:
+      - "3001:3001"
+      - "9876:9876"
+
+    # Token + any other config lives in .env (read on every container
+    # start, persists across reboots). Copy .env.example to .env and
+    # set DOMSHELL_TOKEN to a real value before running `docker compose
+    # up -d`. Compose will error with a clear message if .env is missing.
+    env_file:
+      - .env
+
+    # If you need additional tier flags or DOMSHELL options, override
+    # the Dockerfile's CMD here. Common cases:
+    #   command: ["node", "dist/index.js", "--allow-write", "--allow-sensitive"]
+    #   command: ["node", "dist/index.js", "--allow-write", "--domains", "a.com,b.com"]
+    #   command: ["node", "dist/index.js", "--allow-write", "--granular"]
+    # The image's default CMD is `node dist/index.js --allow-write`.
+
+    # Persist the audit log to a host volume so it survives container
+    # restarts. Remove this mount if you don't care about audit history.
+    volumes:
+      - ./audit.log:/app/audit.log
+
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "require('net').connect(3001,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"
+      interval: 15s
+      timeout: 3s
+      start_period: 15s
+      retries: 5

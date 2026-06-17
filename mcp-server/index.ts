@@ -345,6 +345,7 @@ function sendCommand(
   command: string,
   sessionId: string,
   groupId?: string,
+  initialUrl?: string,
 ): Promise<{ result: string; laneId: string | null }> {
   return new Promise((resolve, reject) => {
     if (!extensionClient || extensionClient.readyState !== 1) {
@@ -360,12 +361,19 @@ function sendCommand(
 
     pendingRequests.set(id, { resolve, reject, timer });
 
+    // initialUrl is forwarded as an optional field on the EXECUTE message.
+    // DOMShell extension 1.3.2+ honors it when groupId === "new" and creates
+    // the lane's working tab with that URL loaded instead of about:blank.
+    // Extension 1.3.1 silently ignores unknown JSON fields, so this is
+    // forward-compatible — old extensions still create an about:blank
+    // placeholder (existing behavior; no regression).
     extensionClient.send(
       JSON.stringify({
         type: "EXECUTE",
         id,
         sessionId,
         groupId,
+        initialUrl,
         command,
         allowedDomains: ALLOWED_DOMAINS.length > 0 ? ALLOWED_DOMAINS : undefined,
       })
@@ -377,6 +385,7 @@ async function execWithSecurity(
   command: string,
   sessionId: string,
   groupId?: string,
+  initialUrl?: string,
 ): Promise<{ result: string; laneId: string | null }> {
   // Check tier
   const check = isCommandAllowed(command);
@@ -401,7 +410,7 @@ async function execWithSecurity(
   audit(`${tag}EXECUTE: ${command}`);
 
   try {
-    const r = await sendCommand(command, sessionId, groupId);
+    const r = await sendCommand(command, sessionId, groupId, initialUrl);
     const result = redactSensitiveOutput(command, r.result);
     const summary = result.length > 80 ? result.slice(0, 80) + "..." : result;
     audit(`${tag}RESULT: ${summary}`);
@@ -441,6 +450,11 @@ When you need MULTIPLE lanes — parallel tasks, or you share one MCP connection
   • group_id "shared"     → explicitly opt into the default per-connection lane (shared across any agents multiplexing this MCP connection — Claude Desktop does this — but still isolated from the user's regular tabs).
   • group_id "<id>"       → join the lane with that numeric id. HANDOFF: another agent can give you its lane id to continue its work in the same state.
   • group_id omitted      → DEPRECATED. Currently maps to the shared lane and emits a [DEPRECATION] warning in the reply. A future major release will require an explicit group_id. Migrate by passing "new", "shared", or a numeric id explicitly on every call.
+
+FRESH LANE WITH A KNOWN URL (recommended when you have it)
+When you pass group_id="new" and already know the URL you want to start at, pass it as the initial_url parameter on the same domshell_execute call:
+  domshell_execute({ command: "text main", group_id: "new", initial_url: "https://example.com/article" })
+The new lane's working tab is created with that URL loaded directly (no about:blank placeholder, no extra 'open <url>' round-trip, cursor already inside the loaded tab). Honored by DOMShell extension 1.3.2+; silently ignored by extension 1.3.1 — older extensions still create an about:blank placeholder, so the worst case is the existing behavior. Safe to always pass.
 
 CLEAN UP YOUR LANES WHEN YOU FINISH
 If you CREATED a lane (you passed group_id "new"), CLOSE IT when your task is done — run command "group close" with that same group_id. Don't leave orphan tab groups for the user to clean up.
@@ -1150,9 +1164,10 @@ NOTES
     {
       command: z.string().describe("A DOMShell command, or multiple commands separated by newlines (e.g. 'ls -l' or 'open example.com\\ncd main\\ntext')"),
       group_id: z.string().optional().describe("Which session lane to run in. Pass \"new\" to create a fresh isolated lane, \"shared\" to explicitly opt into the default per-connection lane (shared across any multiplexed clients on this MCP connection, still isolated from the user's tabs), or a numeric lane id to join an existing lane (handoff). Every response ends with a '[lane: <id>]' line — pass that id back as group_id to stay in the same lane. NOTE: omitting group_id is DEPRECATED — currently maps to the shared lane but will be required in a future major release."),
+      initial_url: z.string().optional().describe("OPTIONAL, only meaningful when group_id=\"new\". When set, the new lane's working tab is created with this URL loaded instead of `about:blank` — the lane is ready to use by the time `command` runs (no extra `open <url>` round-trip, no dangling about:blank tab, cursor lands inside the loaded tab). Saves one round-trip when you already know the page you want to start on, e.g. `domshell_execute({command: \"text main\", group_id: \"new\", initial_url: \"https://example.com/article\"})`. Honored by DOMShell extension 1.3.2+; silently ignored by 1.3.1 (the lane is still created with an about:blank placeholder — same behavior as today, no regression). Ignored if group_id is anything other than \"new\"."),
     },
     ANNO_WRITE,
-    async ({ command, group_id }) => {
+    async ({ command, group_id, initial_url }) => {
       // group_id resolution:
       //   undefined        → shared lane + DEPRECATION warning (agent hasn't declared intent)
       //   "shared"         → shared lane, no warning (explicit opt-in; map to undefined for kernel)
@@ -1168,14 +1183,22 @@ NOTES
       let lane = resolvedGroupId;
       let laneId: string | null = null;
       const out: string[] = [];
+      // initial_url is only meaningful on the FIRST line of a multi-line
+      // execute AND only when group_id="new" (lane creation is happening
+      // right now). After the first line, the lane exists; passing
+      // initial_url to subsequent commands would be meaningless and is
+      // silently dropped. Outside group_id="new", it is also ignored.
+      let pendingInitialUrl = (resolvedGroupId === "new") ? initial_url : undefined;
       for (const line of lines) {
         if (lines.length > 1) out.push(`$ ${line}`);
-        const r = await execWithSecurity(line, sidRef.sid, lane);
+        const r = await execWithSecurity(line, sidRef.sid, lane, pendingInitialUrl);
         out.push(r.result);
         laneId = r.laneId;
         // After the first command "new" has materialized — reuse the real id so
         // the remaining commands run in the same lane, not a new one each time.
         if (lane === "new" && r.laneId) lane = r.laneId;
+        // initial_url has been consumed by the first line — clear it.
+        pendingInitialUrl = undefined;
       }
 
       // Deprecation warning when the agent omitted group_id entirely — they

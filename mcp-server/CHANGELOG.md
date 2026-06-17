@@ -3,6 +3,30 @@
 Notable changes to DOMShell — the Chrome extension and the `@apireno/domshell` MCP server.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The two artifacts version independently.
 
+## MCP server `2.0.4` — 2026-06-17
+
+Server-only patch. No Chrome extension changes — extension stays at `1.3.1` on the Chrome Web Store; the kernel side of this feature is queued for a future bundled extension `1.3.2` submission. The new parameter ships now as forward-compatible spec; eager adopters can pass it today and get the optimized behaviour automatically the moment the extension upgrade lands.
+
+### Added — MCP server (`2.0.4`)
+
+- **New `initial_url` parameter on `domshell_execute`** — optional, only meaningful when `group_id="new"`. When set, the new lane's working tab is created with that URL loaded instead of `about:blank`. The fresh lane is ready to use by the time `command` runs (no extra `open <url>` round-trip, no dangling `about:blank` tab, cursor lands inside the loaded tab). Example:
+
+  ```json
+  {
+    "command": "text main",
+    "group_id": "new",
+    "initial_url": "https://example.com/article"
+  }
+  ```
+
+  **Compat note:** the parameter is forwarded to the extension as a new field on the WebSocket `EXECUTE` message. **Extension 1.3.2+ honors it; extension 1.3.1 silently ignores unknown JSON fields**, so the worst case on a current installation is exactly today's behaviour (an `about:blank` placeholder is created, the agent's next `open` command opens a second tab — no regression). Safe to always pass; agents that don't know the URL up front continue to omit it.
+
+  Forwarded only on the FIRST line of a multi-line `domshell_execute` call (since that's when the lane is created) and only when `group_id="new"` (silently dropped otherwise). Tracked kernel-side as [DOMShell #52](https://github.com/apireno/DOMShell/issues/52).
+
+### Notes — MCP server (`2.0.4`)
+
+- Pure additive release. Same auth-token / port / host env-var contract as 2.0.3. CLI-Anything (PR #308 integrator) doesn't need any changes — they don't pass `initial_url` today and their flow keeps working unchanged. If they want the optimisation later for their `page open` flow on a fresh REPL, it's a future opt-in PR on their side; no coordination required with this release.
+
 ## MCP server `2.0.3` — 2026-06-08
 
 Server-only patch. No Chrome extension changes; the extension stays at `1.3.1`. Adds an optional container + ToolHive install path alongside the existing native stdio install — both coexist; stdio remains the documented default.

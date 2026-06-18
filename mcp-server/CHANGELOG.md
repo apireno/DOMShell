@@ -3,6 +3,51 @@
 Notable changes to DOMShell — the Chrome extension and the `@apireno/domshell` MCP server.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The two artifacts version independently.
 
+## MCP server `2.0.5` — 2026-06-18
+
+Server-only patch. Two unrelated improvements that both reduce friction without requiring a Chrome Web Store cycle: method-aware auth on `/mcp` (so MCP introspection clients work without a bearer token) and a new `group_name` parameter on `domshell_execute` (so integrators can name lanes for garbage-collection sweeps). No Chrome extension changes; no integrator coordination required.
+
+### Changed — MCP server (`2.0.5`)
+
+- **`mcpAuthMiddleware` now inspects the JSON-RPC method.** Read-only protocol methods bypass the bearer-token check; invocation methods continue to require it. The bypass set is:
+
+  | Method | Why it's safe to expose unauthenticated |
+  |---|---|
+  | `initialize` | Returns protocol version + capabilities — same info already publicly declared in the MCP registry entry |
+  | `tools/list` | Returns tool definitions — same info already in the registry |
+  | `ping` | Liveness check, returns no data |
+  | `notifications/initialized` | One-way client → server, no return value |
+  | `notifications/cancelled` | One-way client → server, no return value |
+
+  Everything else — including `tools/call` (the only method that actually invokes a tool and can touch the browser) — keeps the existing bearer-token requirement. The audit log + write/sensitive tier flags + token remain the security boundary for any action.
+
+  **Motivation:** without this change, `thv tui` rendered the workload's Tools tab as `Error: initialize MCP client: transport error: server returned 4xx for initialize POST` because thv's introspection probe doesn't carry the bearer token. MCP Inspector hit the same wall. Codegram (and similar auth-less MCP servers) work in those clients out of the box; DOMShell's deliberate auth posture for action endpoints shouldn't have to take introspection down with it.
+
+  **Threat model delta:** an attacker who can already reach the loopback port can now see the tool list (which is already published in the MCP registry) in addition to "a server is here." No new information disclosure beyond what the public registry already provides. No execution surface change — `tools/call` is unchanged.
+
+### Added — MCP server (`2.0.5`)
+
+- **New `group_name` parameter on `domshell_execute`** — optional, only meaningful when `group_id="new"`. Pairs with 2.0.4's `initial_url`. When set, server forwards `groupName` as a new field on the WS `EXECUTE` message; the future DOMShell extension 1.3.2 will use it to title the lane's Chrome tab group as `🐚 <group_name>` instead of the hard-coded `🐚 agent`. Extension 1.3.1 silently ignores the new field (kernel bridge handler only reads `msg.type / msg.command / msg.groupId / msg.allowedDomains` — verified at `src/background/index.ts:579+`), so the worst-case current behavior is the existing generic title. Recommended convention: `<task-type>-<scope>-<run-id-or-sprint>`, e.g. `qa-ux-shopkit-sprint12` or `research-articles-2026-06-18`. Tracked kernel-side as [DOMShell #52](https://github.com/apireno/DOMShell/issues/52) (paired with `--url` work).
+
+  Example:
+
+  ```json
+  {
+    "command": "text main",
+    "group_id": "new",
+    "initial_url": "https://example.com/article",
+    "group_name": "qa-ux-shopkit-sprint12"
+  }
+  ```
+
+  Same multi-line semantics as `initial_url`: forwarded only on the FIRST line of a multi-line `domshell_execute` call and only when `group_id="new"`. Silently dropped otherwise.
+
+- **`MCP_INSTRUCTIONS` extended with a LANE NAMING + GARBAGE COLLECTION section.** Documents the recommended naming convention, the "capture lane id once, reuse for the whole drive, never re-mint" discipline, and the inline-close-or-end-of-round-sweep cleanup pattern. Visible to every agent that fetches the tool's description.
+
+### Notes — MCP server (`2.0.5`)
+
+- Both changes are purely additive on the API surface and forward-compatible. CLI-Anything's flow (which authenticates on every call and doesn't pass `group_name`) is unaffected. Older integrators picking up 2.0.5 get the same behavior as 2.0.4 unless they opt into the new parameter.
+
 ## MCP server `2.0.4` — 2026-06-17
 
 Server-only patch. No Chrome extension changes — extension stays at `1.3.1` on the Chrome Web Store; the kernel side of this feature is queued for a future bundled extension `1.3.2` submission. The new parameter ships now as forward-compatible spec; eager adopters can pass it today and get the optimized behaviour automatically the moment the extension upgrade lands.

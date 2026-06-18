@@ -346,6 +346,7 @@ function sendCommand(
   sessionId: string,
   groupId?: string,
   initialUrl?: string,
+  groupName?: string,
 ): Promise<{ result: string; laneId: string | null }> {
   return new Promise((resolve, reject) => {
     if (!extensionClient || extensionClient.readyState !== 1) {
@@ -361,12 +362,17 @@ function sendCommand(
 
     pendingRequests.set(id, { resolve, reject, timer });
 
-    // initialUrl is forwarded as an optional field on the EXECUTE message.
-    // DOMShell extension 1.3.2+ honors it when groupId === "new" and creates
-    // the lane's working tab with that URL loaded instead of about:blank.
-    // Extension 1.3.1 silently ignores unknown JSON fields, so this is
-    // forward-compatible — old extensions still create an about:blank
-    // placeholder (existing behavior; no regression).
+    // initialUrl + groupName are forwarded as optional fields on the
+    // EXECUTE message. Extension 1.3.2+ honors them when groupId === "new":
+    //   - initialUrl loads the URL into the lane's working tab at creation
+    //     instead of about:blank
+    //   - groupName titles the Chrome tab group as `🐚 <groupName>` instead
+    //     of the hard-coded `🐚 agent`, letting integrators give lanes
+    //     deterministic names for garbage-collection sweeps
+    // Extension 1.3.1 silently ignores unknown JSON fields, so both are
+    // forward-compatible: old extensions still create an about:blank tab
+    // titled `🐚 agent` (existing behavior; no regression). Tracked
+    // kernel-side as DOMShell #52.
     extensionClient.send(
       JSON.stringify({
         type: "EXECUTE",
@@ -374,6 +380,7 @@ function sendCommand(
         sessionId,
         groupId,
         initialUrl,
+        groupName,
         command,
         allowedDomains: ALLOWED_DOMAINS.length > 0 ? ALLOWED_DOMAINS : undefined,
       })
@@ -386,6 +393,7 @@ async function execWithSecurity(
   sessionId: string,
   groupId?: string,
   initialUrl?: string,
+  groupName?: string,
 ): Promise<{ result: string; laneId: string | null }> {
   // Check tier
   const check = isCommandAllowed(command);
@@ -410,7 +418,7 @@ async function execWithSecurity(
   audit(`${tag}EXECUTE: ${command}`);
 
   try {
-    const r = await sendCommand(command, sessionId, groupId, initialUrl);
+    const r = await sendCommand(command, sessionId, groupId, initialUrl, groupName);
     const result = redactSensitiveOutput(command, r.result);
     const summary = result.length > 80 ? result.slice(0, 80) + "..." : result;
     audit(`${tag}RESULT: ${summary}`);
@@ -451,10 +459,37 @@ When you need MULTIPLE lanes — parallel tasks, or you share one MCP connection
   • group_id "<id>"       → join the lane with that numeric id. HANDOFF: another agent can give you its lane id to continue its work in the same state.
   • group_id omitted      → DEPRECATED. Currently maps to the shared lane and emits a [DEPRECATION] warning in the reply. A future major release will require an explicit group_id. Migrate by passing "new", "shared", or a numeric id explicitly on every call.
 
-FRESH LANE WITH A KNOWN URL (recommended when you have it)
-When you pass group_id="new" and already know the URL you want to start at, pass it as the initial_url parameter on the same domshell_execute call:
-  domshell_execute({ command: "text main", group_id: "new", initial_url: "https://example.com/article" })
-The new lane's working tab is created with that URL loaded directly (no about:blank placeholder, no extra 'open <url>' round-trip, cursor already inside the loaded tab). Honored by DOMShell extension 1.3.2+; silently ignored by extension 1.3.1 — older extensions still create an about:blank placeholder, so the worst case is the existing behavior. Safe to always pass.
+FRESH LANE WITH A KNOWN URL + NAME (recommended)
+When you pass group_id="new", pass two optional fields on the same call for a cleaner setup:
+  domshell_execute({
+    command: "text main",
+    group_id: "new",
+    initial_url: "https://example.com/article",
+    group_name: "qa-ux-shopkit-sprint12"
+  })
+
+- initial_url loads the URL into the lane's working tab at creation (no about:blank placeholder, no extra 'open <url>' round-trip, cursor lands inside the loaded tab).
+- group_name titles the Chrome tab group so you and downstream sweeps can identify it later.
+
+Honored by DOMShell extension 1.3.2+; silently ignored by extension 1.3.1 — older extensions still create an about:blank tab titled 'agent', so the worst case is the existing behavior. Safe to always pass both.
+
+LANE NAMING + GARBAGE COLLECTION (your responsibility)
+Every lane you create with group_id="new" is a Chrome tab group that persists until something closes it. Leaving lanes open after your task is done leaks tabs and clutters the user's browser. Two patterns to apply, in order of preference:
+
+1) Name your lane on creation. Pass group_name with a stable, deterministic identifier:
+     <task-type>-<scope>-<run-id-or-sprint>
+   Examples: "qa-ux-shopkit-sprint12", "research-articles-2026-06-18", "scrape-prices-acme-run42".
+   Why: it makes BOTH inline cleanup AND batch sweeps reliable.
+
+2) Capture the [lane: <id>] from the first reply and reuse it for the WHOLE drive. Never re-mint a lane mid-drive.
+
+3) Close on the way out (every drive). Either inline (try/finally on the integrator side) or via an end-of-round sweep:
+     # list lanes (run with any group_id, e.g. "shared")
+     domshell_execute({ command: "group list", group_id: "shared" })
+     # close one (uses the lane's numeric id from the list)
+     domshell_execute({ command: "group close", group_id: "<numeric-id>" })
+
+A batch sweep ("close everything matching qa-ux-*") is the integrator's responsibility — list the lanes, filter by your naming convention, close each id in turn.
 
 CLEAN UP YOUR LANES WHEN YOU FINISH
 If you CREATED a lane (you passed group_id "new"), CLOSE IT when your task is done — run command "group close" with that same group_id. Don't leave orphan tab groups for the user to clean up.
@@ -1165,9 +1200,10 @@ NOTES
       command: z.string().describe("A DOMShell command, or multiple commands separated by newlines (e.g. 'ls -l' or 'open example.com\\ncd main\\ntext')"),
       group_id: z.string().optional().describe("Which session lane to run in. Pass \"new\" to create a fresh isolated lane, \"shared\" to explicitly opt into the default per-connection lane (shared across any multiplexed clients on this MCP connection, still isolated from the user's tabs), or a numeric lane id to join an existing lane (handoff). Every response ends with a '[lane: <id>]' line — pass that id back as group_id to stay in the same lane. NOTE: omitting group_id is DEPRECATED — currently maps to the shared lane but will be required in a future major release."),
       initial_url: z.string().optional().describe("OPTIONAL, only meaningful when group_id=\"new\". When set, the new lane's working tab is created with this URL loaded instead of `about:blank` — the lane is ready to use by the time `command` runs (no extra `open <url>` round-trip, no dangling about:blank tab, cursor lands inside the loaded tab). Saves one round-trip when you already know the page you want to start on, e.g. `domshell_execute({command: \"text main\", group_id: \"new\", initial_url: \"https://example.com/article\"})`. Honored by DOMShell extension 1.3.2+; silently ignored by 1.3.1 (the lane is still created with an about:blank placeholder — same behavior as today, no regression). Ignored if group_id is anything other than \"new\"."),
+      group_name: z.string().optional().describe("OPTIONAL, only meaningful when group_id=\"new\". Names the new lane's Chrome tab group (shows as `🐚 <group_name>` in Chrome's tab strip) so you and downstream garbage-collection sweeps can identify it later. Recommended convention: `<task-type>-<scope>-<run-id-or-sprint>`, e.g. `qa-ux-shopkit-sprint12` or `research-articles-2026-06-18`. Lanes without a name fall back to a generic `agent` title — fine for one-off use but makes garbage-collection by name pattern impossible. Honored by DOMShell extension 1.3.2+; silently ignored by 1.3.1 (lane still created with title `agent` — existing behavior, no regression). Ignored if group_id is anything other than \"new\"."),
     },
     ANNO_WRITE,
-    async ({ command, group_id, initial_url }) => {
+    async ({ command, group_id, initial_url, group_name }) => {
       // group_id resolution:
       //   undefined        → shared lane + DEPRECATION warning (agent hasn't declared intent)
       //   "shared"         → shared lane, no warning (explicit opt-in; map to undefined for kernel)
@@ -1183,22 +1219,24 @@ NOTES
       let lane = resolvedGroupId;
       let laneId: string | null = null;
       const out: string[] = [];
-      // initial_url is only meaningful on the FIRST line of a multi-line
-      // execute AND only when group_id="new" (lane creation is happening
-      // right now). After the first line, the lane exists; passing
-      // initial_url to subsequent commands would be meaningless and is
-      // silently dropped. Outside group_id="new", it is also ignored.
+      // initial_url and group_name are only meaningful on the FIRST line
+      // of a multi-line execute AND only when group_id="new" (lane creation
+      // is happening right now). After the first line, the lane exists;
+      // passing them to subsequent commands would be meaningless and is
+      // silently dropped. Outside group_id="new", they are also ignored.
       let pendingInitialUrl = (resolvedGroupId === "new") ? initial_url : undefined;
+      let pendingGroupName  = (resolvedGroupId === "new") ? group_name  : undefined;
       for (const line of lines) {
         if (lines.length > 1) out.push(`$ ${line}`);
-        const r = await execWithSecurity(line, sidRef.sid, lane, pendingInitialUrl);
+        const r = await execWithSecurity(line, sidRef.sid, lane, pendingInitialUrl, pendingGroupName);
         out.push(r.result);
         laneId = r.laneId;
         // After the first command "new" has materialized — reuse the real id so
         // the remaining commands run in the same lane, not a new one each time.
         if (lane === "new" && r.laneId) lane = r.laneId;
-        // initial_url has been consumed by the first line — clear it.
+        // initial_url + group_name have been consumed by the first line — clear them.
         pendingInitialUrl = undefined;
+        pendingGroupName = undefined;
       }
 
       // Deprecation warning when the agent omitted group_id entirely — they
@@ -1254,7 +1292,29 @@ const transports: Record<string, StreamableHTTPServerTransport> = {};
 
 // ---- MCP Auth Middleware ----
 
+// Read-only MCP protocol methods that bypass the bearer-token gate. These
+// expose only what's already publicly published in the MCP registry
+// (server capabilities + tool definitions); they never invoke a tool or
+// touch the browser. Allowing them through unauthenticated enables
+// introspection clients — `thv tui` Tools tab, MCP Inspector, future MCP
+// browser UIs — to display server metadata without each one needing the
+// bearer token. Action methods (tools/call) keep the existing gate, so
+// the audit-log + write/sensitive tier flags + token remain the security
+// boundary for anything that actually invokes a command.
+const PUBLIC_MCP_METHODS = new Set([
+  "initialize",
+  "tools/list",
+  "ping",
+  "notifications/initialized",
+  "notifications/cancelled",
+]);
+
 function mcpAuthMiddleware(req: Request, res: Response, next: NextFunction): void {
+  // Read-only protocol methods: pass through unauthenticated.
+  if (typeof req.body?.method === "string" && PUBLIC_MCP_METHODS.has(req.body.method)) {
+    next();
+    return;
+  }
   // Check Authorization header: "Bearer <token>"
   const authHeader = req.headers["authorization"];
   if (authHeader) {

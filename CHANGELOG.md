@@ -3,6 +3,28 @@
 Notable changes to DOMShell — the Chrome extension and the `@apireno/domshell` MCP server.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The two artifacts version independently.
 
+## Chrome extension `1.3.2` — 2026-06-20
+
+Two paired kernel fixes that fulfill commitments made by the MCP server's forward-compat parameter ships across 2.0.4–2.0.6, and answer the QA-UX integrator memo about orphan `agent` Chrome tab groups. No new permissions; Chrome Web Store re-review is code-only.
+
+### Changed — Chrome extension (`1.3.2`)
+
+- **The connection-default lane is no longer auto-created on every MCP `SESSION_START`** ([#53](https://github.com/apireno/DOMShell/issues/53)). Previously every MCP connection eagerly minted a Chrome tab group titled `🐚 agent` containing one `about:blank` placeholder, which accumulated as orphan groups across connection cycles and was unattributable to its client. Now isolation happens ONLY when the agent explicitly requests it via `group_id="new"`. **Semantic shift:** `group_id="shared"` and omitted-`group_id` now mean true shared mode (operates on the user's actual browser tabs) instead of "the connection's default isolated lane." This shift was telegraphed by MCP server 2.0.2's deprecation cycle and explicitly called out in 2.0.6's `[DEPRECATION]` reply text. Integrators that always pass explicit `group_id` (e.g. HKUDS/CLI-Anything's harness) are unaffected; integrators using `"shared"` or omitted should migrate to `group_id="new"` for any drive that needs isolation.
+
+### Added — Chrome extension (`1.3.2`)
+
+- **`groupNew` now honors `--url <url>` for the working tab + `groupName` for the title** ([#52](https://github.com/apireno/DOMShell/issues/52)). Paired with MCP server 2.0.4's `initial_url` parameter and 2.0.5's `group_name` parameter — both have been forward-compat-silently-ignored by 1.3.1 since their releases. As of 1.3.2 they actually do what their published descriptions promise:
+  - `domshell_execute({command: "...", group_id: "new", initial_url: "https://example.com/article", group_name: "qa-ux-shopkit-sprint12"})` creates a Chrome tab group titled `🐚 qa-ux-shopkit-sprint12` with the article URL loaded directly — no `about:blank` placeholder, no extra `open <url>` round-trip, cursor automatically inside the loaded tab.
+  - The in-shell `group new --url <url> <name>` syntax also works for terminal users (e.g. `group new --url https://example.com sprint12`).
+- `groupNew` + `createAgentLane` signature changes are additive — callers that don't pass the new params keep the existing behavior verbatim.
+
+### Notes — Chrome extension (`1.3.2`)
+
+- This release closes the forward-compat debt that accumulated across MCP server 2.0.4 / 2.0.5 / 2.0.6. Eager-adopter integrators that have been passing `initial_url` / `group_name` against the published schema now get the optimized behavior automatically.
+- **HKUDS/CLI-Anything** is unaffected by either #53 or #52. Their `_call_execute` always sets an explicit `group_id` (`"new"` or captured numeric id) and never uses `"shared"` or omitted. No coordinated release required.
+- The QA-UX integrator memo's asks 1 (name from `clientInfo.name`), 2 (reap on disconnect), 3 (auto-close never-navigated), 4 (lane metadata + `group gc`), 5 (lazy creation) are all subsumed by this release: there's no connection-default lane to name, reap, idle-close, list, or lazy-create. Their inline `group close <id>` cleanup remains the right pattern for the explicit lanes they do mint.
+- Four kernel-side issues queued for a future bundled extension release ([#47](https://github.com/apireno/DOMShell/issues/47), [#48](https://github.com/apireno/DOMShell/issues/48), [#49](https://github.com/apireno/DOMShell/issues/49), [#51](https://github.com/apireno/DOMShell/issues/51)) are deliberately deferred. Each has a viable workaround and none reflect a felt user pain. They ship when one of them becomes a real friction point, not on a speculative-bundle schedule.
+
 ## MCP server `2.0.6` — 2026-06-19
 
 Server-only patch. Documentation + deprecation-message tightening that telegraphs an upcoming semantic shift in DOMShell extension `1.3.2` / DOMShell `3.0.0`. **No behavioral change in 2.0.6** — same wire format, same lane mechanics, same auth model as 2.0.5. The messaging update is forward-compat advance notice so integrators have time to audit before the kernel-side change ships.

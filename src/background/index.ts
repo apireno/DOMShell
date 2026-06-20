@@ -188,15 +188,24 @@ function currentLaneId(): string | null {
 }
 
 /** Create a fresh agent-declared lane: a new session + tab group, keyed
- *  `agent:<groupId>` and made current (group_id "new" — ADR-004 D4). */
-async function createAgentLane(): Promise<void> {
+ *  `agent:<groupId>` and made current (group_id "new" — ADR-004 D4).
+ *  ADDED IN 1.3.2 (#52): optional initialUrl + groupName. When set, the
+ *  group is titled with groupName (instead of the hard-coded "agent") and
+ *  the working tab loads initialUrl (instead of about:blank). Both pair
+ *  with the matching MCP server parameters initial_url (2.0.4+) and
+ *  group_name (2.0.5+) — forward-compat: omitted by extension <=1.3.1
+ *  callers, honored here. */
+async function createAgentLane(initialUrl?: string, groupName?: string): Promise<void> {
   const tempKey = `agent:pending:${++agentLaneSeq}`;
   await swapToSession(tempKey);
   groupMode = "shared";
   sessionGroupId = null;
   sessionGroupName = null;
   sessionGroupDisrupted = false;
-  await groupNew(["agent"]);
+  const args: string[] = [];
+  if (initialUrl) args.push("--url", initialUrl);
+  args.push(groupName ?? "agent");
+  await groupNew(args);
   if (sessionGroupId !== null) {
     // Re-key the session by its real group id — that id is the agent's handle.
     const realKey = `agent:${sessionGroupId}`;
@@ -542,21 +551,29 @@ function wsConnect(): void {
         const mcpSid = msg.sessionId ? `mcp:${msg.sessionId}` : "mcp";
 
         if (msg.type === "SESSION_START") {
-          // An MCP session started — give it a fresh isolated group (ADR-001 D3).
-          // SESSION_START fires once per MCP client session, so each session
-          // gets its own clean lane. Discard any persisted state first: a fresh
-          // connect can restore stale "isolated" state (chrome.storage) — a
-          // closed group, or a still-live leftover group from a prior session.
-          // Reusing either would inherit stale tabs and the wrong group name.
-          // The MCP bridge is its own session, separate from every side panel
-          // (Sprint 03 — Multi-Session). Its group binding lives in that session.
+          // An MCP session started — prepare its session state.
+          //
+          // CHANGED IN 1.3.2 (#53): we no longer eagerly create a Chrome tab
+          // group here. Previously every MCP connection auto-minted a lane
+          // titled "agent" with an about:blank placeholder, which accumulated
+          // as orphans across connection cycles (see the QA-UX integrator
+          // memo at docs/handovers/MEMO-connection-default-lane-naming-and-
+          // lifecycle-20260619.md). Isolation now happens ONLY when the
+          // agent explicitly asks for it via group_id="new"; this code path
+          // just sets up the per-session state and waits for the first
+          // command. Discard any persisted "isolated" state from a stale
+          // chrome.storage record so the new session starts clean.
+          //
+          // SEMANTIC SHIFT IMPLIED: group_id="shared" / omitted now means
+          // true shared mode (sees the user's actual browser) instead of
+          // "the connection's default isolated lane." This was telegraphed
+          // by MCP server 2.0.6's [DEPRECATION] reply text and instructions.
           await runSerialized(async () => {
             await swapToSession(mcpSid);
             groupMode = "shared";
             sessionGroupId = null;
             sessionGroupName = null;
             sessionGroupDisrupted = false;
-            await groupNew(["agent"]);
             mcpSessionActive = true;
           });
           return;
@@ -581,7 +598,14 @@ function wsConnect(): void {
             async (): Promise<{ result: string; laneId: string | null }> => {
               // Resolve the target lane (PRD-003 — agent-declared sessions).
               if (msg.groupId === "new") {
-                await createAgentLane();
+                // ADDED IN 1.3.2 (#52): pass through msg.initialUrl and
+                // msg.groupName when present (MCP server 2.0.4's
+                // initial_url and 2.0.5's group_name). Older callers
+                // omit both fields and createAgentLane falls back to
+                // about:blank + 'agent' as before.
+                const initialUrl = typeof msg.initialUrl === "string" ? msg.initialUrl : undefined;
+                const groupName  = typeof msg.groupName  === "string" ? msg.groupName  : undefined;
+                await createAgentLane(initialUrl, groupName);
               } else if (typeof msg.groupId === "string" && msg.groupId) {
                 const ok = await swapToAgentLane(msg.groupId);
                 if (!ok) {
@@ -3655,8 +3679,18 @@ async function groupNew(rest: string[]): Promise<string> {
   const previousGroupId =
     (groupMode === "isolated" && sessionGroupId !== null && !sessionGroupDisrupted)
       ? sessionGroupId : null;
+  // ADDED IN 1.3.2 (#52): parse optional `--url <url>` flag. When present,
+  // the working tab is created with that URL loaded instead of about:blank,
+  // and we wait for the navigation to complete + auto-cd into the loaded
+  // tab. Remaining args after extraction form the group name as before.
+  let workingUrl = "about:blank";
+  const urlIdx = rest.indexOf("--url");
+  if (urlIdx !== -1 && rest[urlIdx + 1]) {
+    workingUrl = rest[urlIdx + 1];
+    rest = [...rest.slice(0, urlIdx), ...rest.slice(urlIdx + 2)];
+  }
   const name = rest.join(" ").trim();
-  const tab = await chrome.tabs.create({ url: "about:blank", active: false });
+  const tab = await chrome.tabs.create({ url: workingUrl, active: false });
   if (!tab.id) return "\x1b[31mgroup new: failed to create a working tab.\x1b[0m";
   createdTabIds.add(tab.id);
   let gid: number;
@@ -3674,15 +3708,52 @@ async function groupNew(rest: string[]): Promise<string> {
   sessionGroupId = gid;
   sessionGroupName = cleanGroupName(title);
   sessionGroupDisrupted = false;
-  // Land at the group's tab-listing level (not inside the blank working tab),
-  // so `ls` shows the group's tabs right away.
-  state.path = ["tabs"];
-  state.axNodeIds = [];
+  // When --url was given, wait for the page load to complete AND attach
+  // CDP so the AX tree is ready for the agent's first command. Without
+  // the CDP attach, state.path points at a tab whose nodeMap is empty,
+  // so the next command's ensureInsideTab() throws "Tab context lost"
+  // (observed by the QA-UX integrator during 1.3.2 testing — the agent's
+  // first `ls` after a successful initial_url load was failing). Mirrors
+  // enterTab's attach-before-commit pattern (line 2857). If the attach
+  // fails (rare — chrome://, devtools://, etc.), fall back to landing at
+  // the group's tab listing rather than wedging state in an unreachable
+  // tab. For the about:blank default path, keep the existing behavior.
+  if (workingUrl !== "about:blank") {
+    await new Promise<void>((resolve) => {
+      const listener = (id: number, info: { status?: string }) => {
+        if (id === tab.id && info.status === "complete") {
+          chrome.tabs.onUpdated.removeListener(listener);
+          resolve();
+        }
+      };
+      chrome.tabs.onUpdated.addListener(listener);
+      setTimeout(() => {
+        chrome.tabs.onUpdated.removeListener(listener);
+        resolve();
+      }, 5000);
+    });
+    try {
+      await cdpSwitchToTab(tab.id);
+      state.path = ["tabs", String(tab.id)];
+      // cdpSwitchToTab populated state.axNodeIds with the AX-tree root —
+      // do NOT wipe it below. The next command runs against the loaded
+      // page's AX tree without an intervening cd.
+    } catch {
+      state.path = ["tabs"];
+      state.axNodeIds = [];
+    }
+  } else {
+    state.path = ["tabs"];
+    state.axNodeIds = [];
+  }
   persistState();
   const lines = [
     `\x1b[32m✓ Created isolated group '${title}'  [id ${gid}]\x1b[0m`,
     `  \x1b[37mWorking tab: ${tab.id}\x1b[0m`,
   ];
+  if (workingUrl !== "about:blank") {
+    lines.push(`  \x1b[37mLoaded: ${workingUrl}\x1b[0m`);
+  }
   if (previousGroupId !== null) {
     lines.push(`  \x1b[33mPrevious group [id ${previousGroupId}] left open — 'group attach ${previousGroupId}' to return to it.\x1b[0m`);
   }

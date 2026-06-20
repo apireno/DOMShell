@@ -3,6 +3,19 @@
 Notable changes to DOMShell — the Chrome extension and the `@apireno/domshell` MCP server.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The two artifacts version independently.
 
+## Chrome extension `1.3.3` — 2026-06-20
+
+Hotfix for a #52-implementation race in `1.3.2` discovered after the `1.3.2` CWS submission was already pending review. **`1.3.3` is functionally identical to `1.3.2` plus one fix** — same #52 + #53 scope, same QA-UX integrator motivation, same forward-compat story. Bumped to `1.3.3` rather than re-submitting `1.3.2` because the Chrome Web Store doesn't allow modifying a pending-review submission.
+
+### Fixed — Chrome extension (`1.3.3`)
+
+- **`groupNew` with `--url` (or MCP `initial_url`) now attaches CDP before returning**, so the agent's first command after lane creation runs against a fully-prepared tab instead of failing with `Error: Tab context lost. Navigate to a tab with 'cd tabs/<id>'`. Mirrors `enterTab`'s attach-before-commit pattern at line 2857. The 1.3.2 implementation set `state.path = ["tabs", <id>]` but never called `cdpSwitchToTab`, so `ensureInsideTab()` threw on `nodeMap.size === 0` for any command issued in the same MCP call as a successful `initial_url` lane creation. Caught by the QA-UX integrator running the canonical `domshell_execute({command:"ls", group_id:"new", group_name:"...", initial_url:"..."})` shape against the unpacked 1.3.2 build.
+
+### Notes — Chrome extension (`1.3.3`)
+
+- If `1.3.2` ships to existing users before `1.3.3` is approved (typical CWS review wait is 3-7 days per submission), the race manifests as `Tab context lost` on the FIRST command in any drive that uses `initial_url`. Workaround for the gap window: after the lane-creation reply lands, issue `cd tabs/<the-tab-id-from-state.path>` before any read. The QA-UX integrator's drive already has async-state retry logic that handles this naturally. Direct Claude Desktop / Cursor sessions using `initial_url` will see the error and need to retry.
+- `1.3.3` includes all `1.3.2` changes verbatim: `#53` (no eager SESSION_START lane) and `#52` (`--url` + `groupName` plumb-through). The only delta is the `cdpSwitchToTab` call in `groupNew`'s `--url` path.
+
 ## Chrome extension `1.3.2` — 2026-06-20
 
 Two paired kernel fixes that fulfill commitments made by the MCP server's forward-compat parameter ships across 2.0.4–2.0.6, and answer the QA-UX integrator memo about orphan `agent` Chrome tab groups. No new permissions; Chrome Web Store re-review is code-only.

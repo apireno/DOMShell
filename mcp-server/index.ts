@@ -454,10 +454,12 @@ Every domshell_execute reply ends with a "[lane: <id>]" line — your current la
 Your MCP connection gets its OWN lane automatically. You typically need nothing more — just call domshell_execute and the default lane handles it.
 
 When you need MULTIPLE lanes — parallel tasks, or you share one MCP connection with another agent (Claude Desktop multiplexes every chat over one connection, so two chats would land in one lane by default) — use the group_id parameter on domshell_execute:
-  • group_id "new"        → create a fresh isolated lane. Its id comes back in the [lane:] line. Carry that id on every later call.
-  • group_id "shared"     → explicitly opt into the default per-connection lane (shared across any agents multiplexing this MCP connection — Claude Desktop does this — but still isolated from the user's regular tabs).
+  • group_id "new"        → create a fresh isolated lane. Its id comes back in the [lane:] line. Carry that id on every later call. **RECOMMENDED for any drive that interacts with the page.**
   • group_id "<id>"       → join the lane with that numeric id. HANDOFF: another agent can give you its lane id to continue its work in the same state.
-  • group_id omitted      → DEPRECATED. Currently maps to the shared lane and emits a [DEPRECATION] warning in the reply. A future major release will require an explicit group_id. Migrate by passing "new", "shared", or a numeric id explicitly on every call.
+  • group_id "shared"     → operate without isolation. **IMPORTANT SEMANTIC NOTE:** today this maps to a per-connection isolated lane, but in DOMShell 3.0.0 / extension 1.3.2 this will shift to mean "no isolation — your commands run against the user's actual browser tabs." If you want a private workspace, do NOT use "shared" — use group_id="new". Use "shared" only when you deliberately want to read/affect the user's existing tabs (e.g. a side-panel-style helper that operates on whatever the user is currently looking at).
+  • group_id omitted      → DEPRECATED. Currently maps to "shared" and emits a [DEPRECATION] warning. Future major release will require an explicit group_id AND will inherit the "shared" semantic shift above.
+
+If you only ever interact with the page, the rule is: pass group_id="new" on the first call, capture the returned [lane: <id>] marker, pass that id on every later call. Don't use "shared" unless you have a specific reason to operate on the user's real browser.
 
 FRESH LANE WITH A KNOWN URL + NAME (recommended)
 When you pass group_id="new", pass two optional fields on the same call for a cleaner setup:
@@ -1249,9 +1251,13 @@ NOTES
         out.push("");
         out.push(
           '[DEPRECATION] group_id omitted — running in the shared per-connection lane. ' +
-          'Pass group_id="new" to create a private lane, or "shared" to ' +
-          'explicitly opt into this lane. Future major release will require ' +
-          'an explicit group_id.'
+          'Pass group_id="new" to create a private isolated lane (recommended), ' +
+          'or group_id="<numeric-id>" to join an existing one. ' +
+          'TWO changes coming in DOMShell 3.0.0 / extension 1.3.2: ' +
+          '(1) omitting group_id will be a hard error, and ' +
+          '(2) the "shared" / omitted-group_id semantic will shift to mean ' +
+          '"no isolation — operates on the user\'s actual browser, not a private tab group." ' +
+          'Migrate now by passing group_id="new" on every call that needs an isolated lane.'
         );
       }
 

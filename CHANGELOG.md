@@ -3,6 +3,28 @@
 Notable changes to DOMShell — the Chrome extension and the `@apireno/domshell` MCP server.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The two artifacts version independently.
 
+## MCP server `2.0.6` — 2026-06-19
+
+Server-only patch. Documentation + deprecation-message tightening that telegraphs an upcoming semantic shift in DOMShell extension `1.3.2` / DOMShell `3.0.0`. **No behavioral change in 2.0.6** — same wire format, same lane mechanics, same auth model as 2.0.5. The messaging update is forward-compat advance notice so integrators have time to audit before the kernel-side change ships.
+
+### Changed — MCP server (`2.0.6`)
+
+- **`[DEPRECATION] group_id omitted` reply message now warns about the upcoming `"shared"` semantic shift**, not just the upcoming hard-error on omitted. Old text only said "future major release will require an explicit group_id"; new text additionally says:
+
+  > In DOMShell 3.0.0 / extension 1.3.2 (1) omitting `group_id` will be a hard error, and (2) the `"shared"` / omitted-`group_id` semantic will shift to mean "no isolation — operates on the user's actual browser, not a private tab group."
+
+  This is the integrator-facing version of an architecture decision documented as [DOMShell #53](https://github.com/apireno/DOMShell/issues/53): the per-connection isolated lane that's currently created eagerly on every MCP `initialize` (titled `🐚 agent`, with an `about:blank` placeholder) will be removed. Going forward, isolation will happen ONLY when the agent explicitly asks for it via `group_id="new"`. The connection-default lane stops existing.
+
+- **`MCP_INSTRUCTIONS` LANES section rewritten** to recommend `group_id="new"` as the default pattern for any drive that interacts with the page, and to spell out the upcoming `"shared"` semantic clearly. New explicit guidance:
+
+  > If you only ever interact with the page, the rule is: pass `group_id="new"` on the first call, capture the returned `[lane: <id>]` marker, pass that id on every later call. Don't use `"shared"` unless you have a specific reason to operate on the user's real browser.
+
+### Notes — MCP server (`2.0.6`)
+
+- **No code change is required for any current integrator** in 2.0.6. The behavior change lands when extension `1.3.2` ships ([DOMShell #53](https://github.com/apireno/DOMShell/issues/53)). CLI-Anything (HKUDS/CLI-Anything PR #308) is unaffected by either release — their `_call_execute` always sets an explicit `group_id` (`"new"` or a captured numeric id) and never uses `"shared"` or omitted. Their existing test suite stays green.
+- Integrators who DO use `group_id="shared"` for isolation today should migrate to `group_id="new"` before extension `1.3.2`. Today's behavior of `"shared"` (per-connection isolated lane) and tomorrow's behavior (no isolation, user's real browser) differ materially for write-tier commands.
+- The motivating evidence is documented in the [QA-UX integrator memo at docs/handovers/MEMO-connection-default-lane-naming-and-lifecycle-20260619.md](docs/handovers/MEMO-connection-default-lane-naming-and-lifecycle-20260619.md) — orphan `agent` tab groups accumulating across connection cycles, unattributable to which client created them, and never reaped. The fix collapses every ask in the memo (naming, reaping, idle-close, metadata, lazy creation) into a single change: stop the eager lane creation. Nothing to reap if it never gets created.
+
 ## MCP server `2.0.5` — 2026-06-18
 
 Server-only patch. Two unrelated improvements that both reduce friction without requiring a Chrome Web Store cycle: method-aware auth on `/mcp` (so MCP introspection clients work without a bearer token) and a new `group_name` parameter on `domshell_execute` (so integrators can name lanes for garbage-collection sweeps). No Chrome extension changes; no integrator coordination required.

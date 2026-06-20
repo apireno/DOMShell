@@ -1,6 +1,6 @@
 {
   "name": "@apireno/domshell",
-  "version": "2.0.5",
+  "version": "2.0.6",
   "description": "MCP server that gives AI agents Unix-style filesystem commands (ls, cd, grep, click, type) to drive Chrome. Single-tool interface, concurrent multi-agent isolation, per-lane tab groups.",
   "type": "module",
   "main": "dist/index.js",

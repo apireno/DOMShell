@@ -194,8 +194,12 @@ function currentLaneId(): string | null {
  *  the working tab loads initialUrl (instead of about:blank). Both pair
  *  with the matching MCP server parameters initial_url (2.0.4+) and
  *  group_name (2.0.5+) — forward-compat: omitted by extension <=1.3.1
- *  callers, honored here. */
-async function createAgentLane(initialUrl?: string, groupName?: string): Promise<void> {
+ *  callers, honored here.
+ *  CHANGED IN 1.3.4: returns the ANSI-stripped error string from groupNew
+ *  when the Chrome tab/group APIs fail (previously the return was thrown
+ *  away, leaving the caller and the MCP server's response-validation gate
+ *  blind to why the mint didn't produce a lane). Returns null on success. */
+async function createAgentLane(initialUrl?: string, groupName?: string): Promise<string | null> {
   const tempKey = `agent:pending:${++agentLaneSeq}`;
   await swapToSession(tempKey);
   groupMode = "shared";
@@ -205,18 +209,23 @@ async function createAgentLane(initialUrl?: string, groupName?: string): Promise
   const args: string[] = [];
   if (initialUrl) args.push("--url", initialUrl);
   args.push(groupName ?? "agent");
-  await groupNew(args);
-  if (sessionGroupId !== null) {
-    // Re-key the session by its real group id — that id is the agent's handle.
-    const realKey = `agent:${sessionGroupId}`;
-    const s = sessions.get(tempKey);
-    if (s) {
-      sessions.delete(tempKey);
-      s.id = realKey;
-      sessions.set(realKey, s);
-      currentSessionId = realKey;
-    }
+  const groupNewResult = await groupNew(args);
+  if (sessionGroupId === null) {
+    // groupNew returned early (chrome.tabs.create failed, chrome.tabs.group
+    // threw, etc.). Surface the diagnostic to the caller so the WS RESULT
+    // can carry a real error instead of a bare laneId=null.
+    return stripAnsi(groupNewResult).trim() || "groupNew returned without setting sessionGroupId";
   }
+  // Re-key the session by its real group id — that id is the agent's handle.
+  const realKey = `agent:${sessionGroupId}`;
+  const s = sessions.get(tempKey);
+  if (s) {
+    sessions.delete(tempKey);
+    s.id = realKey;
+    sessions.set(realKey, s);
+    currentSessionId = realKey;
+  }
+  return null;
 }
 
 /** Join an existing agent-declared lane by its group id (handoff — ADR-004 D7).
@@ -603,9 +612,23 @@ function wsConnect(): void {
                 // initial_url and 2.0.5's group_name). Older callers
                 // omit both fields and createAgentLane falls back to
                 // about:blank + 'agent' as before.
+                // CHANGED IN 1.3.4: capture and surface createAgentLane's
+                // error string. Previously the return was discarded and a
+                // failed mint just left sessionGroupId=null, so the WS
+                // RESULT carried laneId=null with no diagnostic and the
+                // MCP server's 2.0.7 response-validation gate had to
+                // report "no lane id" without knowing why. Now the actual
+                // Chrome API failure (chrome.tabs.create returning no id,
+                // chrome.tabs.group throwing, etc.) rides in the reply.
                 const initialUrl = typeof msg.initialUrl === "string" ? msg.initialUrl : undefined;
                 const groupName  = typeof msg.groupName  === "string" ? msg.groupName  : undefined;
-                await createAgentLane(initialUrl, groupName);
+                const mintError = await createAgentLane(initialUrl, groupName);
+                if (mintError !== null) {
+                  return {
+                    result: `Error: lane mint failed at extension — ${mintError}`,
+                    laneId: null,
+                  };
+                }
               } else if (typeof msg.groupId === "string" && msg.groupId) {
                 const ok = await swapToAgentLane(msg.groupId);
                 if (!ok) {

@@ -3,6 +3,21 @@
 Notable changes to DOMShell — the Chrome extension and the `@apireno/domshell` MCP server.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The two artifacts version independently.
 
+## Chrome extension `1.3.4` — 2026-07-01
+
+Small hardening patch, paired with MCP server 2.0.7's response-validation gate. Companion release: extension surfaces the actual `chrome.tabs` failure reason on a failed lane mint so that when the server-side gate fires (`MINT-FAIL: laneId=null`), the drive gets an actionable string instead of just "no lane id."
+
+### Changed — Chrome extension (`1.3.4`)
+
+- **`createAgentLane` now returns the ANSI-stripped error string from `groupNew`** on failure ([`src/background/index.ts:198`](https://github.com/apireno/DOMShell/blob/main/src/background/index.ts#L198)). Previously the return value was discarded (`await groupNew(args);` at old line 208), so when `chrome.tabs.create` returned a tab without an id, or `chrome.tabs.group` threw a `Tabs cannot be edited right now` / `Grouping is not editable` / similar, the error message was thrown away and `sessionGroupId` just stayed null. The WS `RESULT` then carried `laneId: null` with no diagnostic — the MCP server's 2.0.7 gate could only report "no lane id" without knowing why. Now `createAgentLane`'s return type is `Promise<string | null>`: null on success, the error string on failure.
+- **EXECUTE handler at `src/background/index.ts:605` surfaces the mint error via the WS `RESULT`** when `msg.groupId === "new"` and `createAgentLane` returns a non-null string. Reply format: `Error: lane mint failed at extension — <actual chrome.tabs error>`. The MCP server's `MINT-FAIL:` audit line and the drive-facing error both carry the upstream reason.
+
+### Notes — Chrome extension (`1.3.4`)
+
+- **Paired with MCP server 2.0.7's response-validation gate.** The two changes work together: server-side, 2.0.7 refuses to forward the extension's payload when `laneId=null` on a `group_id="new"` call. Extension-side, 1.3.4 makes that null case carry a specific reason. Neither is useful in isolation — both together turn a silent-shared-fallback hazard into a fail-closed error with a diagnostic.
+- **Triggering context**: the kgspin QA-UX bug report `docs/handovers/DOMSHELL-BUG-lane-isolation-intermittent-20260630.md`. Root cause turned out to be environmental (stale orphan proxy processes + concurrent DOMShell consumer creating WS-holder contention), not a DOMShell code bug — post-cleanup and 1.3.4-bridged, mints landed cleanly against the same drive shape that had been failing. 1.3.4 stands as defense-in-depth: if the same contention pattern recurs anywhere, the specific Chrome API failure is now visible in the reply text, not hidden.
+- Zero wire-schema changes. HKUDS/CLI-Anything, kgspin drives, Claude Desktop, Cursor callers all continue to work with their current `domshell_execute` calls. The change is only visible when a mint actually fails.
+
 ## MCP server `2.0.7` — 2026-06-30
 
 Server-only patch. Three protections in response to the kgspin QA-UX bug report `docs/handovers/DOMSHELL-BUG-lane-isolation-intermittent-20260630.md` — intermittent `group_id:"new"` calls landing on the operator's real browser tabs (Gmail / banking) instead of a fresh isolated lane. All three fixes ship server-side so no Chrome Web Store re-review is needed and no integrator has to change wire calls. Extension 1.3.3 unchanged.

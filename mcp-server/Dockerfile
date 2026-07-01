@@ -47,7 +47,14 @@ ENV DOMSHELL_MCP_HOST=0.0.0.0
 # DOMSHELL_MCP_PORT in the image would shadow `MCP_PORT` and break the
 # thv-managed path (Path 3).
 
-EXPOSE 3001 9876
+# EXPOSE the MCP HTTP port ONLY — not the WS bridge (9876). ToolHive's
+# proxy inspects the image's EXPOSE list to decide which port is the MCP
+# transport target; if multiple ports are listed it picks the wrong one
+# (observed forwarding to 9876 instead of 3001 in thv v0.29.1 when both
+# were exposed). The WS bridge to the Chrome extension still gets
+# published to the host via `-p 9876:9876` on `thv run` or `ports:` in
+# docker-compose.yml — it just isn't advertised in the image metadata.
+EXPOSE 3001
 
 # Healthcheck against the HTTP MCP listener. Doesn't try /mcp directly
 # (that needs auth) — just a raw TCP connect, which is what ToolHive's

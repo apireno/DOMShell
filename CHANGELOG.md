@@ -3,6 +3,31 @@
 Notable changes to DOMShell — the Chrome extension and the `@apireno/domshell` MCP server.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The two artifacts version independently.
 
+## MCP server `2.0.7` — 2026-06-30
+
+Server-only patch. Three protections in response to the kgspin QA-UX bug report `docs/handovers/DOMSHELL-BUG-lane-isolation-intermittent-20260630.md` — intermittent `group_id:"new"` calls landing on the operator's real browser tabs (Gmail / banking) instead of a fresh isolated lane. All three fixes ship server-side so no Chrome Web Store re-review is needed and no integrator has to change wire calls. Extension 1.3.3 unchanged.
+
+### Added — MCP server (`2.0.7`)
+
+- **New `domshell_about` MCP tool.** Read tool. Returns JSON with `mcp_server_version`, `extension_bridged`, `extension_version` (from the HELLO handshake, live — not from a log line that may be stale), `extension_grouping`, `extension_connected_at`, and the bind ports. Drives can call this at startup to pin-verify who they're actually talking to, and again on any surprising failure to disambiguate stale-log / wrong-extension issues from real bugs. Directly answers ask #3 in the kgspin memo.
+- **Response-validation gate on `group_id:"new"` calls.** When a drive requests `group_id="new"` and the extension's `RESULT` doesn't carry a numeric lane id, the server now refuses to return the extension's payload. Instead it surfaces:
+
+  > `Error: lane mint failed — group_id="new" was requested but the extension returned no numeric lane id (got laneId=...). The command was NOT run in a fresh isolated lane. Refusing to return the extension's payload because it may reflect the operator's real browser state (active tab), not an isolated tab group.`
+
+  This is the DOMShell #53 hazard: a failed extension-side mint would silently degrade to `swapToSession(mcpSid)` in the kernel, which cursors on the last known session tab — for a stale MCP session that can mean the operator's active Gmail/banking tab. The gate fail-closes: an actionable error goes back to the drive, no operator-real-browser payload is exposed. Answers ask #1 in the kgspin memo. Well-behaved drives (existing `group_id="new"` calls that succeed extension-side) are unaffected — the gate only fires on failure.
+
+### Changed — MCP server (`2.0.7`)
+
+- **Every `domshell_execute` call now audit-logs the received `group_id` / `initial_url` / `group_name` values verbatim** (plus a truncated command preview) to the audit log. This is the diagnostic that pins down wire-truth in intermittent bugs: the server-side `[DEPRECATION] group_id omitted` reply footer fires only when `group_id === undefined` at the tool handler, so if a drive claims to pass `"new"` and the deprecation fires, the audit line proves whether the field reached the server or was dropped client-side. Turns "sometimes it doesn't work" reports into a reproducible wire trace.
+- **HELLO handshake state now cached** for `domshell_about` and audit-logged as a distinct `HELLO: extension v… grouping=…` line (in addition to the existing stdout log). Cleared on WS close/error so `domshell_about` always reports live state, never a stale value from a previous holder.
+
+### Notes — MCP server (`2.0.7`)
+
+- **No Chrome Web Store submission.** All three protections live in the MCP server. Extension 1.3.3 shipped 2026-06-20 remains the latest CWS build.
+- **No integrator wire changes.** `domshell_execute` schema is unchanged. `domshell_about` is a new tool but no drive is required to call it — it's a diagnostic surface, not part of any existing flow. HKUDS/CLI-Anything, kgspin QA-UX drives, and Claude Desktop / Cursor callers all continue to work with their current MCP tool calls.
+- **Root-cause investigation still open.** The response-validation gate catches the operator-Gmail-exposure hazard regardless of root cause. The audit log lets us determine whether the kgspin bug is (a) the drive intermittently dropping `group_id` before it reaches the wire, (b) multiple concurrent MCP sessions each starting with no lane state, or (c) an extension-side race in `createAgentLane`. Reply to kgspin with the diagnostic path in a separate handover.
+- The `v1.3.1 red herring` in the kgspin report — a stale line from `~/Library/Application Support/toolhive/logs/domshell-mcp-server.log` dated 2026-06-18/19 — is exactly what `domshell_about` prevents future integrators from hitting: it reads live handshake state, not the log file. If a real `v1.3.1` extension is currently bridged, `extension_version` says so; if the log line is stale, it says `1.3.3`.
+
 ## Chrome extension `1.3.3` — 2026-06-20
 
 Hotfix for a #52-implementation race in `1.3.2` discovered after the `1.3.2` CWS submission was already pending review. **`1.3.3` is functionally identical to `1.3.2` plus one fix** — same #52 + #53 scope, same QA-UX integrator motivation, same forward-compat story. Bumped to `1.3.3` rather than re-submitting `1.3.2` because the Chrome Web Store doesn't allow modifying a pending-review submission.

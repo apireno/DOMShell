@@ -7,6 +7,12 @@ import { z } from "zod";
 import { randomBytes, randomUUID } from "node:crypto";
 import { appendFileSync, openSync, readSync, writeSync } from "node:fs";
 
+// Kept in sync with mcp-server/package.json and mcp-server/server.json.
+// Surfaced by the domshell_about tool so integrators can pin-verify which
+// server version answered a call, and echoed in the connection log for
+// server-side triage.
+const MCP_SERVER_VERSION = "2.0.7";
+
 // ---- CLI Flags ----
 
 const args = process.argv.slice(2);
@@ -226,6 +232,11 @@ function redactSensitiveOutput(command: string, output: string): string {
 
 let extensionClient: WebSocket | null = null;
 let extensionGrouping = false;                 // connected extension supports tab grouping? (HELLO, ADR-001 D11)
+// Populated from the HELLO handshake; surfaced by domshell_about so
+// integrators can pin-verify which extension is actually bridged (vs.
+// reading a stale log line). Reset to null on ws close.
+let extensionVersion: string | null = null;
+let extensionConnectedAt: string | null = null;
 // Multi-session (PRD-002 Phase 2): no single-session limit — concurrent MCP
 // clients each get their own session. This tracks SESSION_START messages not
 // yet delivered (the extension was offline when the session initialized);
@@ -276,6 +287,7 @@ wss.on("connection", (ws, req) => {
   }
 
   extensionClient = ws;
+  extensionConnectedAt = new Date().toISOString();
   log("Extension connected (authenticated)");
   audit("CONNECTED: extension authenticated");
 
@@ -291,9 +303,12 @@ wss.on("connection", (ws, req) => {
           pending.resolve({ result: msg.result ?? "", laneId: msg.groupId ?? null });
         }
       } else if (msg.type === "HELLO") {
-        // Capability handshake (ADR-001 D11).
+        // Capability handshake (ADR-001 D11). Version + grouping capability
+        // are cached on this WS holder for the domshell_about tool.
         extensionGrouping = Array.isArray(msg.capabilities) && msg.capabilities.includes("grouping");
+        extensionVersion = typeof msg.version === "string" && msg.version ? msg.version : null;
         log(`Extension v${msg.version ?? "?"} connected — grouping ${extensionGrouping ? "supported" : "NOT supported (legacy mode)"}`);
+        audit(`HELLO: extension v${extensionVersion ?? "?"} grouping=${extensionGrouping}`);
         // Deliver SESSION_START once per session: if a session is active but
         // SESSION_START has not reached the extension yet (it connected after
         // the session began, or an earlier send dropped), send it now. NOT on
@@ -317,6 +332,9 @@ wss.on("connection", (ws, req) => {
   ws.on("close", () => {
     if (extensionClient === ws) {
       extensionClient = null;
+      extensionVersion = null;
+      extensionGrouping = false;
+      extensionConnectedAt = null;
       log("Extension disconnected");
       audit("DISCONNECTED: extension");
     }
@@ -325,6 +343,9 @@ wss.on("connection", (ws, req) => {
   ws.on("error", () => {
     if (extensionClient === ws) {
       extensionClient = null;
+      extensionVersion = null;
+      extensionGrouping = false;
+      extensionConnectedAt = null;
     }
   });
 });
@@ -1170,6 +1191,35 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
   }
   }  // end granular per-command tools (ADR-002)
 
+  // -- Diagnostic tool: domshell_about (always registered) --
+  //
+  // Reports the runtime identity of both server halves so integrators can
+  // pin-verify who they are actually talking to on a per-request basis,
+  // rather than trusting a log file that may be stale. Cheap read call
+  // (no browser round-trip); safe to call unconditionally at drive startup
+  // and again on any surprising failure to disambiguate version issues.
+  // Added in 2.0.7 in response to the 2026-06-30 kgspin bug report where a
+  // stale "v1.3.1 connected" log line was mistaken for the live version.
+  server.tool(
+    "domshell_about",
+    "Report DOMShell runtime identity: MCP server version, bridged extension version (from HELLO handshake), whether an extension is currently connected, and connection timestamp. Use this at drive startup to pin-verify what you're actually talking to, and again on any surprising failure (silent shared-fallback, unexpected DOM, missing lane marker) to disambiguate stale-log/wrong-extension issues from real bugs. Returns JSON — always safe to call, no side effects.",
+    {},
+    ANNO_READ,
+    async () => {
+      const info = {
+        mcp_server_version: MCP_SERVER_VERSION,
+        extension_bridged: extensionClient !== null && extensionClient.readyState === 1,
+        extension_version: extensionVersion,
+        extension_grouping: extensionGrouping,
+        extension_connected_at: extensionConnectedAt,
+        ws_bridge_port: PORT,
+        ws_bridge_host: HOST,
+        mcp_port: MCP_PORT,
+      };
+      return { content: [{ type: "text", text: JSON.stringify(info, null, 2) }] };
+    }
+  );
+
   // -- Primary interface: domshell_execute (always registered) --
 
   server.tool(
@@ -1206,6 +1256,21 @@ NOTES
     },
     ANNO_WRITE,
     async ({ command, group_id, initial_url, group_name }) => {
+      // Diagnostic audit (2.0.7, #kgspin-2026-06-30): log the received wire
+      // values verbatim on every EXECUTE. The server-side [DEPRECATION]
+      // "group_id omitted" footer fires only when group_id === undefined
+      // reaches this handler, so if a drive claims to pass "new" but the
+      // deprecation fires, the wire truth is captured here. Truncate the
+      // command to keep the audit line bounded; keep the head so multi-line
+      // execs are still recognizable.
+      const cmdPreview = command.length > 120 ? command.slice(0, 120) + "…" : command;
+      audit(
+        `EXECUTE received: group_id=${JSON.stringify(group_id)} ` +
+        `initial_url=${JSON.stringify(initial_url)} ` +
+        `group_name=${JSON.stringify(group_name)} ` +
+        `command=${JSON.stringify(cmdPreview)}`
+      );
+
       // group_id resolution:
       //   undefined        → shared lane + DEPRECATION warning (agent hasn't declared intent)
       //   "shared"         → shared lane, no warning (explicit opt-in; map to undefined for kernel)
@@ -1228,9 +1293,37 @@ NOTES
       // silently dropped. Outside group_id="new", they are also ignored.
       let pendingInitialUrl = (resolvedGroupId === "new") ? initial_url : undefined;
       let pendingGroupName  = (resolvedGroupId === "new") ? group_name  : undefined;
+      // Response-validation gate (2.0.7, #kgspin-2026-06-30): if the drive
+      // asks for group_id="new" and the extension's reply doesn't carry a
+      // numeric lane id, the mint didn't produce an isolated lane — the
+      // command ran against whatever session state the extension had, which
+      // for a bridged extension without a fresh lane can mean the operator's
+      // real active tab (Gmail / banking / etc. — the DOMShell #53 hazard).
+      // Refuse to return the extension's payload; surface an explicit error
+      // instead so the drive fail-closes rather than silently touching the
+      // operator's real browser. Only enforced on the FIRST line of a
+      // new-mint call — after the first line succeeds, `lane` is rewritten
+      // to the real numeric id at line 1288.
+      let mintFailedError: string | null = null;
       for (const line of lines) {
         if (lines.length > 1) out.push(`$ ${line}`);
+        const mintingNow = lane === "new";
         const r = await execWithSecurity(line, sidRef.sid, lane, pendingInitialUrl, pendingGroupName);
+        if (mintingNow && (r.laneId === null || !/^\d+$/.test(r.laneId))) {
+          audit(
+            `MINT-FAIL: group_id="new" requested but extension replied laneId=${JSON.stringify(r.laneId)} — refusing payload`
+          );
+          mintFailedError =
+            'Error: lane mint failed — group_id="new" was requested but the extension ' +
+            `returned no numeric lane id (got laneId=${JSON.stringify(r.laneId)}). The ` +
+            'command was NOT run in a fresh isolated lane. Refusing to return the ' +
+            "extension's payload because it may reflect the operator's real browser " +
+            'state (active tab), not an isolated tab group. Next steps: (1) call ' +
+            'domshell_about to verify which extension is bridged, (2) check the ' +
+            'DOMShell side panel for errors, (3) retry group_id="new". If this ' +
+            'keeps happening the extension may need a reload.';
+          break;
+        }
         out.push(r.result);
         laneId = r.laneId;
         // After the first command "new" has materialized — reuse the real id so
@@ -1239,6 +1332,9 @@ NOTES
         // initial_url + group_name have been consumed by the first line — clear them.
         pendingInitialUrl = undefined;
         pendingGroupName = undefined;
+      }
+      if (mintFailedError !== null) {
+        return { content: [{ type: "text", text: mintFailedError }] };
       }
 
       // Deprecation warning when the agent omitted group_id entirely — they

@@ -5,7 +5,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The tw
 
 ## MCP server `2.0.8` — 2026-07-08 (security)
 
-Server-only patch closing a read/write tier boundary bypass reported privately on 2026-07-08 by **Ugur Ozer, AI Risk Management** (`info@airiskmanagement.ca`) under finding id `DOMSHELL-EVAL-READ-TIER-BYPASS-001`. Assigned CVE / GHSA identifiers ride with the coordinated advisory.
+Server-only patch closing a read/write tier boundary bypass reported privately on 2026-07-08 by **Ugur Ozer, AI Risk Management** (`info@airiskmanagement.ca` · <https://airiskmanagement.ca>) under finding id `DOMSHELL-EVAL-READ-TIER-BYPASS-001`. Coordinated advisory: [GHSA-vg83-hcp4-5qcc](https://github.com/apireno/DOMShell/security/advisories/GHSA-vg83-hcp4-5qcc) (CVE assignment pending — GitHub processes CVEs asynchronously; advisory page updates when assigned).
 
 ### Security — MCP server (`2.0.8`)
 

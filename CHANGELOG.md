@@ -3,6 +3,29 @@
 Notable changes to DOMShell — the Chrome extension and the `@apireno/domshell` MCP server.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The two artifacts version independently.
 
+## MCP server `2.0.8` — 2026-07-08 (security)
+
+Server-only patch closing a read/write tier boundary bypass reported privately on 2026-07-08 by **Ugur Ozer, AI Risk Management** (`info@airiskmanagement.ca`) under finding id `DOMSHELL-EVAL-READ-TIER-BYPASS-001`. Assigned CVE / GHSA identifiers ride with the coordinated advisory.
+
+### Security — MCP server (`2.0.8`)
+
+- **`domshell_eval` moved from read tier to write tier** ([`mcp-server/index.ts:113`](https://github.com/apireno/DOMShell/blob/main/mcp-server/index.ts#L113)). Prior versions treated `eval` as read-only in `WRITE_COMMANDS`, allowing it without `--allow-write`. However, `eval` and `js` both dispatch to the same handler ([`src/background/index.ts:1849-1854`](https://github.com/apireno/DOMShell/blob/main/src/background/index.ts#L1849-L1854)) → `handleJs` → `cdp.evaluateJs` → CDP `Runtime.evaluate` with `expression: code, returnByValue: true, awaitPromise: true` and **no `throwOnSideEffect` gate** ([`src/background/cdp_client.ts:660-667`](https://github.com/apireno/DOMShell/blob/main/src/background/cdp_client.ts#L660-L667)). Any JavaScript expression could therefore mutate DOM/window/global state through `domshell_eval` without `--allow-write` — an authorization boundary bypass (CWE-863 class), aggravated by the fact that the tool description explicitly promised "(read-only) ... always available in read-only mode." No new capability was exposed (the same write access was available via `domshell_js` with `--allow-write`), but the tier misclassification meant MCP hosts, tier flags, and audit logs misrepresented the capability being granted.
+
+  The fix moves `eval` into `WRITE_COMMANDS` alongside `js`. The extension code path is unchanged — the tier gate lives entirely in the MCP server, so no Chrome Web Store submission is required. Every downstream check (`isCommandAllowed`, `getCommandTier`, tier annotations, deny messages, audit lines) picks up the new classification automatically.
+
+- **`domshell_eval` MCP annotation changed from `ANNO_READ` to `ANNO_WRITE`** ([`mcp-server/index.ts:887`](https://github.com/apireno/DOMShell/blob/main/mcp-server/index.ts#L887)). MCP hosts (Claude Desktop, Cursor, etc.) render context-aware approval UI based on this annotation. The prior `readOnlyHint: true` misrepresented the capability to hosts and users alike.
+
+- **Documentation aligned with actual capability.** The tool description, `MCP_INSTRUCTIONS`, and the WHEN-TO-USE / IMPORTANT-TIPS sections all previously advertised `eval` as read-only. Every occurrence updated to reflect the true tier and to point read-only DOM inspection needs at `domshell_cat` / `domshell_text` / `domshell_find` instead.
+
+### Notes — MCP server (`2.0.8`)
+
+- **CLI-Anything (HKUDS/CLI-Anything) is unaffected.** Grepped `domshell_backend.py` for `eval` / `js` command usage — zero hits. Their harness uses `ls`, `cd`, `grep`, `click`, `type`, `focus`, `open`, `back`, `forward`, `close`, `refresh` and has never invoked JavaScript-tier commands.
+- **Chrome extension is unaffected.** The tier gate lives entirely in the MCP server; the extension processes commands as raw strings and doesn't check tiers. Extension 1.3.4 (2026-07-01 CHANGELOG entry below) remains the latest CWS build.
+- **Kgspin QA-UX drives run `--allow-write` for action gates**, so no observed impact. Any drive that previously relied on read-tier `eval` for JS extraction without `--allow-write` will now receive `Error: 'eval' requires --allow-write` — which is the correct behavior; that call was previously being permitted in violation of the documented tier contract.
+- **Direct Claude Desktop / Cursor sessions using granular mode** (`--granular`) that called `domshell_eval` without `--allow-write` will get denied. Same story — the fix aligns behavior with the documented contract.
+- **SECURITY.md added** (this release) with the disclosure ladder — GitHub Private Vulnerability Reporting first, then npm-published maintainer email. GitHub PVR enabled on the repo so future reporters have a first-class channel instead of guessing at contact addresses.
+- Credit: Ugur Ozer (AI Risk Management, `info@airiskmanagement.ca`) — source-review-first responsible disclosure, correct disclosure ladder despite the missing SECURITY.md at time of report.
+
 ## Chrome extension `1.3.4` — 2026-07-01
 
 Small hardening patch, paired with MCP server 2.0.7's response-validation gate. Companion release: extension surfaces the actual `chrome.tabs` failure reason on a failed lane mint so that when the server-side gate fires (`MINT-FAIL: laneId=null`), the drive gets an actionable string instead of just "no lane id."

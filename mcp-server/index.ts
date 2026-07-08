@@ -11,7 +11,7 @@ import { appendFileSync, openSync, readSync, writeSync } from "node:fs";
 // Surfaced by the domshell_about tool so integrators can pin-verify which
 // server version answered a call, and echoed in the connection log for
 // server-side triage.
-const MCP_SERVER_VERSION = "2.0.7";
+const MCP_SERVER_VERSION = "2.0.8";
 
 // ---- CLI Flags ----
 
@@ -110,7 +110,12 @@ function audit(entry: string): void {
 // ---- Command Tiers ----
 
 const NAVIGATE_COMMANDS = new Set(["navigate", "goto", "open", "back", "forward"]);
-const WRITE_COMMANDS = new Set(["click", "focus", "type", "key", "scroll", "js", "select", "close", "call"]);
+// Note: `eval` moved into the write tier as of 2.0.8 (DOMSHELL-EVAL-READ-TIER-BYPASS-001).
+// `eval` and `js` both dispatch to the same handleJs → CDP Runtime.evaluate path in the
+// extension (src/background/index.ts:1849) with no side-effect-free evaluator, so any
+// expression can mutate DOM/window state. Prior classification as read-tier contradicted
+// the actual capability. See CHANGELOG 2.0.8 + the GHSA for details.
+const WRITE_COMMANDS = new Set(["click", "focus", "type", "key", "scroll", "js", "eval", "select", "close", "call"]);
 const SENSITIVE_COMMANDS = new Set(["whoami"]);
 
 // ---- MCP Tool Annotations ----
@@ -466,7 +471,7 @@ COMMAND REFERENCE
 Browser & tabs: tabs · windows · here · cd <path> · open <url> · navigate <url> · back · forward · close [id] · group [new|attach|detach|close|list]
 Reading: ls [--meta --text --json] · cat <name> · text [name] [--links] · tree [depth] · read [name] · grep [-r] <pattern> · find [--type ROLE --meta --text] <pattern> · extract_links · extract_table <name> · screenshot · diff
 Interacting (write tier, needs --allow-write): click <name> · focus <name> · type <text> · key <KeyName> [--modifiers ctrl,shift,…] [--activate] · select <name> <value> · scroll down|up|<name> · submit <input> <value> · wait <pattern>
-JavaScript: eval <expr> (read-only, always available) · js <code> (write tier) · functions [pattern] · call <fn> <args>
+JavaScript: eval <expr> (write tier) · js <code> (write tier) · functions [pattern] · call <fn> <args>
 Workflow: watch <cmd> [--until-change] · for "<cmd>" : <template> · script save|run|list|show|delete · each [--pattern F] <cmd> · bookmark <name> · env · export · history · pwd · refresh
 
 LANES (your isolated workspace)
@@ -531,7 +536,7 @@ WHEN TO USE DOMSHELL (prefer over native browser tools):
 - Getting URLs/hrefs: domshell_cat on a link shows its URL, or domshell_find with --meta --type link
 - Scrolling to see more content: domshell_scroll down/up, or scroll a specific element into view
 - Complex DOM queries: domshell_js for CSS selectors, batch extraction, or computed values
-- Read-only JS queries: domshell_eval for expression evaluation without --allow-write (e.g. document.title, element counts)
+- JS expression evaluation: domshell_eval (write tier — see note below on the 2.0.8 tier change)
 - Interacting: domshell_click, domshell_focus, domshell_type, domshell_select (dropdowns)
 - Waiting for dynamic content: domshell_wait to poll for elements on SPA/AJAX pages
 - Detecting changes: domshell_diff after clicks/submissions to see what was added, removed, or changed in the DOM
@@ -591,7 +596,7 @@ IMPORTANT TIPS:
 - Use domshell_wait after clicks/navigation that trigger async content loading (SPAs, AJAX) instead of retry loops with refresh + find.
 - Use domshell_select for <select> dropdowns instead of js-based workarounds.
 - For keyboard-activated SPA elements (LinkedIn's conversation rows, Notion blocks, Twitter compose, anywhere a div has tabindex="0" and React listens for Enter rather than click): focus + key. The dispatch auto-selects between synthetic and trusted based on whether the target tab is the active tab in its window. If you need a trusted event (event.isTrusted === true — required by React-driven SPAs that guard activation) and the tab is in the background, pass --activate to the key call (key Enter --activate). It briefly makes the tab active, dispatches the trusted event, then restores the previously-active tab. Brief visible flicker for the human — pay the cost only when isTrusted matters. The reply marks which path was used.
-- Use domshell_eval for read-only JS queries (document.title, element counts) — always available, no --allow-write needed. Use domshell_js for DOM-mutating operations.
+- Use domshell_eval for one-off JS expressions (document.title, element counts) and domshell_js for larger scripts. Both require --allow-write as of 2.0.8 — they share the same CDP Runtime.evaluate path and can mutate DOM/window state, so the prior "eval is read-only" classification was retired (GHSA / CHANGELOG 2.0.8).
 - Use --json flag via domshell_execute for machine-parseable output (e.g. "ls --json", "cat --json name", "find --json --type link").
 - Use domshell_diff after clicks/submissions to see what changed — replaces re-exploration with ls/find.
 - Save frequently-visited paths with domshell_execute "bookmark name", then jump back with domshell_cd "@name".
@@ -669,7 +674,7 @@ ANTI-PATTERNS (avoid these):
 - Do NOT poll with repeated find calls for dynamic content — use wait <pattern> to block until the element appears
 - Do NOT use js to set dropdown values — use select <name> <value> for proper event dispatch
 - Do NOT re-explore with ls/find after a click/submit — use diff to see exactly what changed
-- Do NOT use domshell_js for read-only queries when domshell_eval is available — eval works without --allow-write
+- Do NOT assume domshell_eval is side-effect-free — as of 2.0.8 it's write-tier alongside domshell_js (both dispatch to the same CDP Runtime.evaluate path). If you need read-only DOM inspection, use domshell_cat / domshell_text / domshell_find; if you need JS evaluation and have --allow-write, prefer domshell_eval for one-off expressions and domshell_js for multi-line scripts
 - Do NOT manually iterate with separate calls when for can do it — for "find --type heading -n 5" : text {} replaces 5 separate text calls
 - Do NOT switch tabs manually to repeat an operation — use each --pattern filter cmd to run across all matching tabs in one call
 - Do NOT open tabs one-by-one to extract from each — use for "eval [URLs]" : open {} to open them, then each --pattern filter eval <JS> to extract (2 calls instead of 2N)
@@ -877,9 +882,9 @@ function createMcpServer(sidRef: { sid: string }): McpServer {
 
   server.tool(
     "domshell_eval",
-    "Evaluate a JavaScript expression in the tab context (read-only). Returns the result. Unlike domshell_js (which requires --allow-write), eval is always available in read-only mode. Use for extracting data without write permission.\n\nExamples:\n  eval document.title\n  eval window.location.href\n  eval document.querySelectorAll('a').length\n  eval [...document.querySelectorAll('h2')].map(h => h.textContent)",
+    "Evaluate a JavaScript expression in the tab context. Returns the result. WRITE TIER as of 2.0.8 — the expression runs via CDP Runtime.evaluate with no side-effect gate, so any JavaScript can mutate DOM/window/global state. Requires --allow-write, same as domshell_js. Use for one-off expressions (property reads, single-value extractions); prefer domshell_js for multi-statement scripts.\n\nExamples:\n  eval document.title\n  eval window.location.href\n  eval document.querySelectorAll('a').length\n  eval [...document.querySelectorAll('h2')].map(h => h.textContent)\n\nFor read-only DOM inspection without --allow-write, use domshell_cat, domshell_text, or domshell_find instead.",
     { expression: z.string().describe("JavaScript expression to evaluate") },
-    ANNO_READ,
+    ANNO_WRITE,
     async ({ expression }) => ({
       content: [{ type: "text", text: await executeWithSecurity(`eval ${expression}`) }],
     })
@@ -1238,7 +1243,7 @@ COMMAND REFERENCE
 Browser & tabs: tabs · windows · here · cd <path> · open <url> · navigate <url> · back · forward · close [id] · group [new|attach|detach|close|list]
 Reading: ls [--meta --text --json] · cat <name> · text [name] [--links] · tree [depth] · read [name] · grep [-r] <pattern> · find [--type ROLE --meta --text] <pattern> · extract_links · extract_table <name> · screenshot · diff
 Interacting (write tier): click <name> · focus <name> · type <text> · key <KeyName> [--modifiers ctrl,shift,…] [--activate] · select <name> <value> · scroll down|up|<name> · submit <input> <value> · wait <pattern>
-JavaScript: eval <expr> (read-only) · js <code> (write) · functions [pattern] · call <fn> <args>
+JavaScript: eval <expr> (write) · js <code> (write) · functions [pattern] · call <fn> <args>
 Workflow: watch <cmd> [--until-change] · for "<cmd>" : <template> · script save|run|list · each [--pattern F] <cmd> · bookmark <name> · env · history · pwd · help
 
 NOTES

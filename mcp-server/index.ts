@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import express, { type Request, type Response, type NextFunction } from "express";
-import { WebSocketServer, type WebSocket } from "ws";
+import { WebSocketServer, WebSocket } from "ws";
 import { z } from "zod";
 import { randomBytes, randomUUID } from "node:crypto";
 import { appendFileSync, openSync, readSync, writeSync } from "node:fs";
@@ -41,6 +41,13 @@ const ALLOW_SENSITIVE = hasFlag("--allow-sensitive") || hasFlag("--allow-all");
 const NO_CONFIRM = !hasFlag("--confirm");
 const EXPOSE_COOKIES = hasFlag("--expose-cookies");
 const GRANULAR = hasFlag("--granular");  // expose the 38 per-command tools (ADR-002 D2)
+// Singleton guard escape hatch (2.0.9 hardening). By default the server refuses
+// to start a second WS bridge when it detects an existing DOMShell bridge on the
+// same port across BOTH IPv4 and IPv6 loopback — the EADDRINUSE guard alone
+// misses the native(127.0.0.1)+container(0.0.0.0-in-netns) collision that let a
+// stale server squat for days (kgspin 2026-07). Pass --allow-duplicate to bypass
+// (e.g. a deliberate multi-bridge test rig).
+const ALLOW_DUPLICATE = hasFlag("--allow-duplicate");
 // Port precedence: --port / --mcp-port flag wins, then our DOMSHELL_*
 // env vars, then the generic MCP_PORT / PORT names ToolHive injects
 // when it runs the container (target-port → random allocation passed
@@ -275,6 +282,55 @@ const pendingRequests = new Map<
     timer: ReturnType<typeof setTimeout>;
   }
 >();
+
+// ---- Singleton guard (2.0.9 hardening) ----
+//
+// The wss.on("error") EADDRINUSE check below only catches a same-scope collision.
+// It misses the real-world case that let a stale server squat for days: a native
+// server binds 127.0.0.1:9876 while a container binds 0.0.0.0:9876 INSIDE its own
+// network namespace (Docker maps it to the host as IPv6 *:9876). Different host
+// scopes -> no EADDRINUSE -> both run silently, the extension attaches to whichever
+// owns the interface it dialed, and the other becomes an invisible squatter that
+// proxies relay to (kgspin 2026-07). This pre-bind probe closes that gap: it opens a
+// WS to BOTH 127.0.0.1 and ::1 on our port with a deliberately-invalid token. A
+// DOMShell bridge answers by completing the upgrade then closing with code 4001
+// (our invalid-token close code); any successful upgrade means a WS bridge already
+// owns the port. If detected, refuse to start (unless --allow-duplicate) so a second
+// bridge can't silently coexist. A refused/failed connection means the port is free.
+async function detectExistingBridge(port: number): Promise<string | null> {
+  for (const host of ["127.0.0.1", "::1"]) {
+    const hostForUrl = host.includes(":") ? `[${host}]` : host;
+    const found = await new Promise<boolean>((resolve) => {
+      let settled = false;
+      const done = (v: boolean) => { if (!settled) { settled = true; resolve(v); } };
+      let probe: WebSocket;
+      try {
+        probe = new WebSocket(`ws://${hostForUrl}:${port}?token=domshell-singleton-probe-invalid`);
+      } catch { done(false); return; }
+      const timer = setTimeout(() => { try { probe.close(); } catch {} done(false); }, 1500);
+      // A completed upgrade (open) OR a 4001 close both mean a WS bridge is there.
+      probe.on("open", () => { clearTimeout(timer); try { probe.close(); } catch {} done(true); });
+      probe.on("close", (code: number) => { clearTimeout(timer); done(code === 4001); });
+      probe.on("error", () => { clearTimeout(timer); done(false); }); // connection refused -> free
+    });
+    if (found) return host;
+  }
+  return null;
+}
+
+const existingBridgeHost = await detectExistingBridge(PORT);
+if (existingBridgeHost && !ALLOW_DUPLICATE) {
+  log(`ERROR: another DOMShell WS bridge is already listening on ${existingBridgeHost}:${PORT}.`);
+  log("Refusing to start a second bridge — two DOMShell servers on one machine collide:");
+  log("the browser extension attaches to only one, and the other becomes an invisible");
+  log("squatter that MCP clients/proxies silently relay to (stale-version, wrong-lane bugs).");
+  log("Fix: use ONE server per machine (the container/ToolHive OR a single native npx —");
+  log("never both). Stop the other server, or pass --allow-duplicate if this is deliberate.");
+  process.exit(1);
+}
+if (existingBridgeHost && ALLOW_DUPLICATE) {
+  log(`WARNING: another DOMShell WS bridge is on ${existingBridgeHost}:${PORT}; starting anyway (--allow-duplicate).`);
+}
 
 const wss = new WebSocketServer({ port: PORT, host: HOST });
 
@@ -715,7 +771,10 @@ Note: per-action terminal confirmation is OFF by default. Add --confirm to the s
 
 function createMcpServer(sidRef: { sid: string }): McpServer {
   const server = new McpServer(
-    { name: "domshell", version: "1.0.0" },
+    // version reflects the real server version (2.0.9 hardening) — was a stale
+    // hardcoded "1.0.0", which made the MCP `initialize` serverInfo useless for
+    // identifying which DOMShell instance a client/proxy actually reached.
+    { name: "domshell", version: MCP_SERVER_VERSION },
     { instructions: MCP_INSTRUCTIONS }
   );
 

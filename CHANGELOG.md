@@ -3,6 +3,23 @@
 Notable changes to DOMShell — the Chrome extension and the `@apireno/domshell` MCP server.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The two artifacts version independently.
 
+## MCP server `2.0.9` — 2026-07-26 (diagnostics)
+
+Server-only patch responding to the kgspin QA-UX incident report `domshell-incident-lane-mint-null-20260726.md` — `group_id:"new"` mints returning `laneId=null` while reads stayed healthy, with **no cause surfaced to the caller** and a **3-day audit-log gap** over the incident window. This patch makes the *next* failure diagnosable; it does not itself change mint behavior. No Chrome Web Store submission (extension 1.3.4 unchanged); no integrator wire changes.
+
+### Fixed — MCP server (`2.0.9`)
+
+- **The mint-fail gate now forwards the extension's actual reason** ([`mcp-server/index.ts`](https://github.com/apireno/DOMShell/blob/main/mcp-server/index.ts)). Since extension 1.3.4, `createAgentLane` surfaces the real Chrome error (e.g. `group new: failed to create group: Grouping is only supported for normal browser windows`) into the RESULT payload — but the 2.0.7-era response-validation gate discarded that string and returned only a generic `got laneId=null`. The actionable cause was thrown away one layer *above* the fix that produced it. The gate now includes `Extension reason: <...>` in the caller-facing error and records the full reason in the `MINT-FAIL:` audit line. (kgspin defect assertion (a).)
+- **Audit log path is now resolved to an absolute path at startup** ([`mcp-server/index.ts:75`](https://github.com/apireno/DOMShell/blob/main/mcp-server/index.ts#L75)). Previously a bare relative `audit.log`, so a process restarted into a different cwd could silently write to a different file than operators inspect at `/app/audit.log` — the mechanism behind the 3-day coverage hole. Resolving once against the startup cwd pins the destination.
+- **Audit write failures are now surfaced to stderr** (once on failure, once on recovery) instead of being swallowed silently. A silent stop in audit logging becomes a visible `WARNING: audit log write failed …` line in the container stdout, so the log going dark can't hide during the next incident. (kgspin defect assertion (c.3).)
+- **Error-ish results are no longer truncated to 80 chars in the audit log.** The flat 80-char `RESULT:` cap ate mint-failure reasons down to `Groupi...`, losing the exact Chrome grouping error. Results that look like errors (ANSI-red, `Error:`-prefixed, or containing `failed to create group`) now get a 1000-char cap; normal results keep the compact 80-char summary. (kgspin defect assertion (a), audit-side.)
+
+### Notes — MCP server (`2.0.9`)
+
+- **Diagnostic patch, not a behavior fix.** The underlying grouping failure (extension-side `chrome.tabs.group()` rejecting because the lane's working tab lands in a non-normal window, and/or a stale service-worker state after a bridge-process recreation) is **not** addressed here. This patch ensures the next reproduction captures the real Chrome error string — which the audit gap was previously eating — so the correct extension fix can be confirmed before spending a CWS cycle.
+- **No integrator impact.** `domshell_execute` wire schema unchanged. The mint-fail message still starts with `Error:` (HKUDS/CLI-Anything's `_is_error` detects it identically — it gates on the error/not-error verdict, never on the message body). CLI-Anything doesn't call `domshell_about`. Kgspin drives run `--allow-write`. Nothing downstream changes.
+- **Immediate operator recovery** for the live `laneId=null` state remains a **Chrome extension reload** (`chrome://extensions` → reload, or side-panel reconnect) — no tool call can force it remotely. The frozen `extension_connected_at` is a symptom of the extension never re-handshaking after its single post-restart reconnect, not a dead socket (reads round-trip fine, which a half-open socket could not do).
+
 ## MCP server `2.0.8` — 2026-07-08 (security)
 
 Server-only patch closing a read/write tier boundary bypass reported privately on 2026-07-08 by **Ugur Ozer, AI Risk Management** (`info@airiskmanagement.ca` · <https://airiskmanagement.ca>) under finding id `DOMSHELL-EVAL-READ-TIER-BYPASS-001`. Coordinated advisory: [GHSA-vg83-hcp4-5qcc](https://github.com/apireno/DOMShell/security/advisories/GHSA-vg83-hcp4-5qcc) (CVE assignment pending — GitHub processes CVEs asynchronously; advisory page updates when assigned).

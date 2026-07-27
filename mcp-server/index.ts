@@ -6,12 +6,13 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { z } from "zod";
 import { randomBytes, randomUUID } from "node:crypto";
 import { appendFileSync, openSync, readSync, writeSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
 
 // Kept in sync with mcp-server/package.json and mcp-server/server.json.
 // Surfaced by the domshell_about tool so integrators can pin-verify which
 // server version answered a call, and echoed in the connection log for
 // server-side triage.
-const MCP_SERVER_VERSION = "2.0.8";
+const MCP_SERVER_VERSION = "2.0.9";
 
 // ---- CLI Flags ----
 
@@ -72,7 +73,13 @@ const HOST =
   getFlagValue("--host", "") ||
   process.env.DOMSHELL_MCP_HOST ||
   "127.0.0.1";
-const LOG_FILE = getFlagValue("--log-file", "audit.log");
+// Resolve to an ABSOLUTE path at startup (2.0.9). Previously this was a bare
+// relative "audit.log", so if the process ever ran from (or was restarted into)
+// a different cwd than expected, audit writes silently went to a different file
+// than the one operators inspect at /app/audit.log — producing a coverage hole
+// over exactly an incident window (kgspin 2026-07-26). Resolving once against
+// the startup cwd pins the destination regardless of later cwd changes.
+const LOG_FILE = resolvePath(getFlagValue("--log-file", "audit.log"));
 const ALLOWED_DOMAINS = getFlagValue("--domains", "")
   .split(",")
   .map((d) => d.trim().toLowerCase())
@@ -98,12 +105,25 @@ function log(msg: string): void {
   process.stderr.write(`[DOMShell MCP] ${msg}\n`);
 }
 
+// Track whether audit writes are currently failing so a silent stop becomes a
+// VISIBLE stderr warning (2.0.9). Previously write failures were swallowed
+// entirely, so audit logging could stop and nobody would notice until an
+// incident needed the log that wasn't there (kgspin 2026-07-26). We warn once
+// on first failure and once on recovery — not per-line, to avoid log spam.
+let auditWriteFailed = false;
 function audit(entry: string): void {
   const line = `[${new Date().toISOString()}] ${entry}\n`;
   try {
     appendFileSync(LOG_FILE, line);
-  } catch {
-    // Ignore log write failures
+    if (auditWriteFailed) {
+      auditWriteFailed = false;
+      log(`Audit log writing recovered → ${LOG_FILE}`);
+    }
+  } catch (err: any) {
+    if (!auditWriteFailed) {
+      auditWriteFailed = true;
+      log(`WARNING: audit log write failed for ${LOG_FILE}: ${err?.message ?? err}. Audit entries are being dropped until this recovers.`);
+    }
   }
 }
 
@@ -446,7 +466,17 @@ async function execWithSecurity(
   try {
     const r = await sendCommand(command, sessionId, groupId, initialUrl, groupName);
     const result = redactSensitiveOutput(command, r.result);
-    const summary = result.length > 80 ? result.slice(0, 80) + "..." : result;
+    // Give error-ish results a generous cap so the actual cause survives in the
+    // audit log (2.0.9). The prior flat 80-char truncation ate mint-failure
+    // reasons down to "Groupi..." (kgspin 2026-07-26) — losing the one string
+    // that would have identified the Chrome grouping error. Normal (non-error)
+    // results keep the compact 80-char summary to keep the log readable.
+    const isErrorish =
+      /\x1b\[31m/.test(result) ||
+      /^Error:/.test(result) ||
+      result.includes("failed to create group");
+    const cap = isErrorish ? 1000 : 80;
+    const summary = result.length > cap ? result.slice(0, cap) + "..." : result;
     audit(`${tag}RESULT: ${summary}`);
     return { result, laneId: r.laneId };
   } catch (err: any) {
@@ -1315,13 +1345,25 @@ NOTES
         const mintingNow = lane === "new";
         const r = await execWithSecurity(line, sidRef.sid, lane, pendingInitialUrl, pendingGroupName);
         if (mintingNow && (r.laneId === null || !/^\d+$/.test(r.laneId))) {
+          // FORWARD the extension's reason (2.0.9). Since extension 1.3.4,
+          // createAgentLane surfaces the real Chrome error (e.g. "group new:
+          // failed to create group: Grouping is only supported for normal
+          // browser windows") into r.result. The prior gate discarded r.result
+          // and returned only a generic "got laneId=null" — the actionable
+          // cause was thrown away one layer above the fix that produced it
+          // (kgspin 2026-07-26 defect assertion (a)). Now we include it.
+          const extReason = (r.result && r.result.trim())
+            ? r.result.trim()
+            : "(extension returned no reason string — likely an older extension < 1.3.4)";
           audit(
-            `MINT-FAIL: group_id="new" requested but extension replied laneId=${JSON.stringify(r.laneId)} — refusing payload`
+            `MINT-FAIL: group_id="new" replied laneId=${JSON.stringify(r.laneId)} ` +
+            `reason=${JSON.stringify(r.result)} — refusing payload`
           );
           mintFailedError =
             'Error: lane mint failed — group_id="new" was requested but the extension ' +
-            `returned no numeric lane id (got laneId=${JSON.stringify(r.laneId)}). The ` +
-            'command was NOT run in a fresh isolated lane. Refusing to return the ' +
+            `returned no numeric lane id (got laneId=${JSON.stringify(r.laneId)}). ` +
+            `Extension reason: ${extReason} — ` +
+            'the command was NOT run in a fresh isolated lane. Refusing to return the ' +
             "extension's payload because it may reflect the operator's real browser " +
             'state (active tab), not an isolated tab group. Next steps: (1) call ' +
             'domshell_about to verify which extension is bridged, (2) check the ' +

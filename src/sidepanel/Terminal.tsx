@@ -90,20 +90,32 @@ export default function Terminal() {
       })
       .catch(() => port.postMessage({ type: "READY" }));
 
+    // Submit the current line buffer as a command (shared by the Enter key and
+    // by newlines embedded in a paste).
+    const submitLine = () => {
+      term.write("\r\n");
+      const command = lineBuffer.current.trim();
+      if (command) {
+        historyRef.current.push(command);
+        historyIndex.current = historyRef.current.length;
+        port.postMessage({ type: "STDIN", input: command, windowId: windowIdRef.current });
+      } else {
+        writePrompt();
+      }
+      lineBuffer.current = "";
+    };
+
     // Use onData for ALL input — handles both typing and paste
-    term.onData((data) => {
+    term.onData((raw) => {
+      // Strip bracketed-paste markers. xterm can wrap a paste as
+      // \x1b[200~ … \x1b[201~; because that starts with ESC it would otherwise
+      // slip past every branch below (none match) and the whole paste — newline
+      // and all — would be silently dropped, so a pasted command never runs.
+      const data = raw.replace(/\x1b\[20[01]~/g, "");
+      if (data === "") return;
       if (data === "\r") {
-        // Enter
-        term.write("\r\n");
-        const command = lineBuffer.current.trim();
-        if (command) {
-          historyRef.current.push(command);
-          historyIndex.current = historyRef.current.length;
-          port.postMessage({ type: "STDIN", input: command, windowId: windowIdRef.current });
-        } else {
-          writePrompt();
-        }
-        lineBuffer.current = "";
+        // Enter (lone keypress)
+        submitLine();
       } else if (data === "\x7f" || data === "\b") {
         // Backspace (0x7f on Mac, 0x08 on some terminals)
         if (lineBuffer.current.length > 0) {
@@ -138,12 +150,29 @@ export default function Terminal() {
         // Tab — trigger completion
         handleTab(port);
       } else if (!data.startsWith("\x1b")) {
-        // Regular characters or pasted text — append to buffer and echo
-        // Filter out control characters but allow multi-char paste
-        const clean = data.replace(/[\x00-\x08\x0e-\x1f]/g, "");
-        if (clean) {
-          lineBuffer.current += clean;
-          term.write(clean);
+        // Regular characters or pasted text. A paste arrives as one chunk and may
+        // contain newlines (CR, LF, or CRLF) — e.g. copying a line usually brings
+        // a trailing newline. Treat each embedded newline as an Enter: append the
+        // text before it, submit, and keep any remainder on the current line.
+        // (Previously only a lone "\r" submitted, so a paste with a trailing
+        // newline dropped the newline into the buffer and never ran.)
+        const sanitize = (s: string) => s.replace(/[\x00-\x08\x0e-\x1f]/g, "");
+        const normalized = data.replace(/\r\n?/g, "\n");
+        if (normalized.includes("\n")) {
+          const parts = normalized.split("\n");
+          for (let i = 0; i < parts.length - 1; i++) {
+            const clean = sanitize(parts[i]);
+            if (clean) { lineBuffer.current += clean; term.write(clean); }
+            submitLine();
+          }
+          const rest = sanitize(parts[parts.length - 1]);
+          if (rest) { lineBuffer.current += rest; term.write(rest); }
+        } else {
+          const clean = sanitize(normalized);
+          if (clean) {
+            lineBuffer.current += clean;
+            term.write(clean);
+          }
         }
       }
     });

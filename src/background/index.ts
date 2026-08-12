@@ -199,7 +199,7 @@ function currentLaneId(): string | null {
  *  when the Chrome tab/group APIs fail (previously the return was thrown
  *  away, leaving the caller and the MCP server's response-validation gate
  *  blind to why the mint didn't produce a lane). Returns null on success. */
-async function createAgentLane(initialUrl?: string, groupName?: string): Promise<string | null> {
+async function createAgentLane(initialUrl?: string, groupName?: string, windowId?: number): Promise<string | null> {
   const tempKey = `agent:pending:${++agentLaneSeq}`;
   await swapToSession(tempKey);
   groupMode = "shared";
@@ -208,6 +208,10 @@ async function createAgentLane(initialUrl?: string, groupName?: string): Promise
   sessionGroupDisrupted = false;
   const args: string[] = [];
   if (initialUrl) args.push("--url", initialUrl);
+  // ADDED: optional windowId pins the lane's working tab to a specific (normal)
+  // window. Forward-compat — the MCP `window_id` parameter is not shipped yet;
+  // when it is, the WS EXECUTE message carries msg.windowId and it plumbs here.
+  if (windowId !== undefined) args.push("--window", String(windowId));
   args.push(groupName ?? "agent");
   const groupNewResult = await groupNew(args);
   if (sessionGroupId === null) {
@@ -622,7 +626,12 @@ function wsConnect(): void {
                 // chrome.tabs.group throwing, etc.) rides in the reply.
                 const initialUrl = typeof msg.initialUrl === "string" ? msg.initialUrl : undefined;
                 const groupName  = typeof msg.groupName  === "string" ? msg.groupName  : undefined;
-                const mintError = await createAgentLane(initialUrl, groupName);
+                // Forward-compat: honor an optional numeric msg.windowId when the
+                // MCP server's (not-yet-shipped) `window_id` parameter starts
+                // sending it, pinning the lane's tab to a caller-chosen normal
+                // window. Older/omitting callers pass nothing -> current behavior.
+                const windowId = typeof msg.windowId === "number" ? msg.windowId : undefined;
+                const mintError = await createAgentLane(initialUrl, groupName, windowId);
                 if (mintError !== null) {
                   return {
                     result: `Error: lane mint failed at extension — ${mintError}`,
@@ -890,9 +899,17 @@ chrome.runtime.onConnect.addListener((port) => {
 // ---- Welcome Banner ----
 
 function formatWelcome(): string {
+  // Read the version from the manifest so the banner never goes stale (it used
+  // to hard-code "v1.3.1"). Pad the line to the box's 54-char interior so it stays
+  // aligned for any version-string length (also fixes a pre-existing off-by-one
+  // where the version line was one column short of the rest of the box).
+  const version = chrome.runtime.getManifest().version;
+  const INTERIOR = 54;
+  const visibleLen = 3 + "DOMShell v".length + version.length; // "   " + label + version
+  const vPad = " ".repeat(Math.max(0, INTERIOR - visibleLen));
   return [
     "\x1b[36m\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557\x1b[0m",
-    "\x1b[36m\u2551\x1b[0m   \x1b[1;33mDOMShell v1.3.1\x1b[0m                                   \x1b[36m\u2551\x1b[0m",
+    `\x1b[36m\u2551\x1b[0m   \x1b[1;33mDOMShell v${version}\x1b[0m${vPad}\x1b[36m\u2551\x1b[0m`,
     "\x1b[36m\u2551\x1b[0m   \x1b[37mThe browser is your filesystem.\x1b[0m                    \x1b[36m\u2551\x1b[0m",
     "\x1b[36m\u2551\x1b[0m   \x1b[90mhttps://github.com/apireno/DOMShell\x1b[0m                \x1b[36m\u2551\x1b[0m",
     "\x1b[36m\u2551\x1b[0m   \x1b[90mBuilt by Pireno | pireno.com\x1b[0m                       \x1b[36m\u2551\x1b[0m",
@@ -1381,6 +1398,8 @@ const COMMAND_HELP: Record<string, string> = {
     "\x1b[33mSubcommands:\x1b[0m",
     "  \x1b[32mgroup\x1b[0m                Show the current grouping mode and group",
     "  \x1b[32mgroup new [name]\x1b[0m     Create an isolated tab group and work inside it",
+    "                        \x1b[90m--url <url> loads a page; --window <id> pins it to a\x1b[0m",
+    "                        \x1b[90mnormal window (run 'windows' to find a [normal] one)\x1b[0m",
     "  \x1b[32mgroup attach <id>\x1b[0m    Bind to an existing DOMShell-created group",
     "  \x1b[32mgroup detach\x1b[0m         Leave the group; return to shared mode",
     "  \x1b[32mgroup close [id]\x1b[0m     Close a group's DOMShell tabs (user tabs kept)",
@@ -2555,7 +2574,15 @@ async function listBrowserLevel(browserPath: string[]): Promise<string> {
       const tabs = (win.tabs ?? []).filter(tabInScope);
       if (tabs.length === 0) continue;
       const focused = win.focused ? " \x1b[33m(focused)\x1b[0m" : "";
-      lines.push(`\x1b[1;34mWindow ${win.id ?? "?"}\x1b[0m${focused}`);
+      // Surface the window type so a caller can pick a normal window before
+      // minting a lane: only normal windows can host a Chrome tab group, so a
+      // popup/devtools/app window flagged here should NOT be used as a lane's
+      // target window (see 'group new --window <id>').
+      const wtype = win.type ?? "normal";
+      const typeTag = wtype === "normal"
+        ? " \x1b[90m[normal]\x1b[0m"
+        : ` \x1b[31m[${wtype} — cannot host a lane group]\x1b[0m`;
+      lines.push(`\x1b[1;34mWindow ${win.id ?? "?"}\x1b[0m${focused}${typeTag}`);
 
       for (let ti = 0; ti < tabs.length; ti++) {
         const tab = tabs[ti];
@@ -2630,7 +2657,9 @@ async function listBrowserLevelJson(browserPath: string[]): Promise<string> {
         active: tab.active,
         current: tab.id === state.activeTabId,
       }));
-      windows.push({ id: win.id, focused: win.focused, tabs });
+      // `type` lets a caller filter for "normal" windows — the only kind that
+      // can host a lane group (pass the chosen id to 'group new --window <id>').
+      windows.push({ id: win.id, type: win.type ?? "normal", focused: win.focused, tabs });
     }
     return JSON.stringify({ windows });
   }
@@ -3712,13 +3741,60 @@ async function groupNew(rest: string[]): Promise<string> {
     workingUrl = rest[urlIdx + 1];
     rest = [...rest.slice(0, urlIdx), ...rest.slice(urlIdx + 2)];
   }
+  // Optional `--window <id>` — target the window the lane's working tab is created
+  // in. Without it, chrome.tabs.create uses Chrome's *current* window, which — if it
+  // happens to be a non-normal window (popup/devtools/app) — makes the subsequent
+  // chrome.tabs.group() fail with "Grouping is only supported for normal browser
+  // windows". Letting the caller pin a known-normal window (found via `windows` /
+  // `ls --json ~/windows`, which now report each window's `type`) makes lane
+  // placement deterministic. We validate the target IS a normal window and fail loud
+  // otherwise, so a bad id is a legible error at mint time, not an opaque group error.
+  let targetWindowId: number | undefined;
+  const winIdx = rest.indexOf("--window");
+  if (winIdx !== -1 && rest[winIdx + 1]) {
+    const wid = parseInt(rest[winIdx + 1], 10);
+    rest = [...rest.slice(0, winIdx), ...rest.slice(winIdx + 2)];
+    if (Number.isNaN(wid)) {
+      return "\x1b[31mgroup new: --window expects a numeric window id (see 'windows').\x1b[0m";
+    }
+    try {
+      const w = await chrome.windows.get(wid);
+      if (w.type !== "normal") {
+        return `\x1b[31mgroup new: window ${wid} is a '${w.type}' window; a lane group can only be created in a normal window. Run 'windows' to find a [normal] one.\x1b[0m`;
+      }
+      targetWindowId = wid;
+    } catch {
+      return `\x1b[31mgroup new: window ${wid} not found. Run 'windows' to list open windows.\x1b[0m`;
+    }
+  }
   const name = rest.join(" ").trim();
-  const tab = await chrome.tabs.create({ url: workingUrl, active: false });
+  const createProps: chrome.tabs.CreateProperties = { url: workingUrl, active: false };
+  if (targetWindowId !== undefined) createProps.windowId = targetWindowId;
+  // Wrap tab creation so a rejection (e.g. the target window can't accept a normal
+  // tab) surfaces as a legible error instead of leaving the command hung on an
+  // unresolved promise.
+  let tab: chrome.tabs.Tab;
+  try {
+    tab = await chrome.tabs.create(createProps);
+  } catch (err: any) {
+    const where = targetWindowId !== undefined ? ` in window ${targetWindowId}` : "";
+    return `\x1b[31mgroup new: failed to create the working tab${where}: ${err?.message ?? err}\x1b[0m`;
+  }
   if (!tab.id) return "\x1b[31mgroup new: failed to create a working tab.\x1b[0m";
   createdTabIds.add(tab.id);
   let gid: number;
   try {
-    gid = await chrome.tabs.group({ tabIds: [tab.id] });
+    // Pin the new group to the TAB's own window. Without an explicit
+    // createProperties.windowId, chrome.tabs.group() defaults the group to the
+    // *current* window and MOVES the tab there — which silently defeated
+    // --window (the tab was created in the target window, then yanked back to the
+    // focused one). Using tab.windowId keeps the lane where it was placed and is a
+    // no-op for the default (no --window) path where the tab is already current.
+    gid = await chrome.tabs.group(
+      tab.windowId !== undefined
+        ? { tabIds: [tab.id], createProperties: { windowId: tab.windowId } }
+        : { tabIds: [tab.id] }
+    );
   } catch (err: any) {
     return `\x1b[31mgroup new: failed to create group: ${err.message}\x1b[0m`;
   }

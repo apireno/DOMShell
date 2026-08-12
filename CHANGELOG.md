@@ -3,6 +3,29 @@
 Notable changes to DOMShell — the Chrome extension and the `@apireno/domshell` MCP server.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The two artifacts version independently.
 
+## Chrome extension `1.3.5` — 2026-07-27
+
+Non-breaking, backward-compatible extension release adding **deliberate window placement for lane creation**. Motivated by the theorized (not-yet-observed) mint failure where a lane's working tab lands in a non-normal window (popup/devtools/app), making `chrome.tabs.group()` fail with "Grouping is only supported for normal browser windows." Rather than have the kernel guess a window, this gives the *caller* explicit control: enumerate windows, pick a normal one, pin the lane to it. Also a genuinely useful capability beyond the failure — a drive can place its lane in a dedicated window away from the operator's real tabs.
+
+Shipped **extension-first, ahead of the matching MCP `window_id` parameter** (deliberate — the forward-compat lesson from the `initial_url`/`group_name` cycle: don't publish a server parameter before the kernel honors it). The kernel here honors an optional `windowId` on the WS `EXECUTE` message and an in-shell `group new --window <id>` today; the MCP `window_id` parameter + best-practice instructions ship only after this extension is CWS-approved.
+
+### Added — Chrome extension (`1.3.5`)
+
+- **Window listings now report each window's `type`** (`normal` | `popup` | `app` | `devtools`). The `windows` / `ls ~/windows` prose view tags each window `[normal]` or `[<type> — cannot host a lane group]`; `ls --json ~/windows` adds a `type` field per window. Without this, a caller had no way to tell which window is safe to create a lane in.
+- **`group new --window <id>`** — pins the lane's working tab to a specific window. The kernel **validates the target is a normal window** and fails loud otherwise (`window <id> is a '<type>' window; a lane group can only be created in a normal window`), so a bad id is a legible error at mint time rather than an opaque group failure. Pairs with `--url` / group name in any order. Two correctness details found in testing and fixed: (1) `chrome.tabs.group()` without an explicit `createProperties.windowId` defaults the new group to the *current* window and **moves the tab there** — so the working tab was created in the target window and then yanked back to the focused one, silently defeating `--window`; the group is now pinned to the tab's own window. (2) `chrome.tabs.create` is now wrapped so a rejection (e.g. a window that can't accept a normal tab) surfaces as a legible error instead of leaving the command hung.
+- **`createAgentLane` + the WS `EXECUTE` handler honor an optional numeric `windowId`** (forward-compat): when the MCP server's future `window_id` parameter starts sending `msg.windowId`, it plumbs straight through to `group new --window`. Callers that omit it get the current behavior verbatim (tab created in Chrome's current window) — **no regression**.
+
+### Fixed — Chrome extension (`1.3.5`)
+
+- **Side-panel welcome banner showed a stale hardcoded version** (`DOMShell v1.3.1`) on every release since 1.3.1 — the banner string was copy-pasted and never bumped, so it drifted from the real manifest version through 1.3.2/1.3.3/1.3.4. It now reads `chrome.runtime.getManifest().version` — the single source of truth (the manifest version is exactly what ships to the Chrome Web Store), so it can never go stale again. Also fixes a pre-existing off-by-one where the version line was one column short of the rest of the ASCII box; the line is now padded to the box interior for any version-string length.
+- **Side-panel terminal: a pasted command with a trailing newline never ran.** The input handler only submitted on a lone `\r` keypress; a paste arrives as one chunk, and copying a line usually brings a trailing newline (`\n`/`\r\n`) — which the control-char filter didn't strip, so it landed in the line buffer and the command silently never executed (the user saw the cursor drop to a new line with nothing run). The handler now normalizes CR/LF/CRLF and treats each embedded newline in a paste as an Enter (submitting that line, keeping any remainder on the current line), so pasted commands — single or multi-line — run as expected. Typed input is unchanged. Note this only affected humans using the side-panel terminal; MCP agents send commands as JSON over the WS bridge, never through this input.
+
+### Notes — Chrome extension (`1.3.5`)
+
+- **Fully backward-compatible.** Every existing caller (CLI-Anything, kgspin drives, Claude Desktop) is unaffected — the new flag/field are additive and optional. `group_id:"new"` with no window hint behaves exactly as 1.3.4.
+- **The matching MCP work is intentionally deferred** to a post-approval release: an optional `window_id` parameter on `domshell_execute` plus `MCP_INSTRUCTIONS` best-practice (before minting: `windows` → pick a `type:"normal"` window → pass `window_id`; if there are no normal windows, surface a HITL "open a normal window" error).
+- Bundle candidates for this same CWS submission (deferred kernel items): [#47](https://github.com/apireno/DOMShell/issues/47), [#48](https://github.com/apireno/DOMShell/issues/48), [#49](https://github.com/apireno/DOMShell/issues/49), [#51](https://github.com/apireno/DOMShell/issues/51) — worth folding in so the review cycle carries more than one change.
+
 ## MCP server `2.0.9` — 2026-07-26 (diagnostics)
 
 Server-only patch responding to the kgspin QA-UX incident report `domshell-incident-lane-mint-null-20260726.md` — `group_id:"new"` mints returning `laneId=null` while reads stayed healthy, with **no cause surfaced to the caller** and a **3-day audit-log gap** over the incident window. This patch makes the *next* failure diagnosable; it does not itself change mint behavior. No Chrome Web Store submission (extension 1.3.4 unchanged); no integrator wire changes.

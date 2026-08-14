@@ -3,6 +3,20 @@
 Notable changes to DOMShell — the Chrome extension and the `@apireno/domshell` MCP server.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The two artifacts version independently.
 
+## MCP server `2.0.10` — 2026-08-14
+
+Server-only patch, the MCP half of the window-targeting feature whose kernel support shipped in extension **1.3.5** (now live in the Chrome Web Store). Adds an optional `window_id` parameter to `domshell_execute` and documents the best practice. Forward-compat-safe: older extensions silently ignore the field.
+
+### Added — MCP server (`2.0.10`)
+
+- **`window_id` parameter on `domshell_execute`** (optional, numeric; only meaningful with `group_id="new"`). Pins the new lane's working tab to a specific Chrome window. Plumbs straight to the `msg.windowId` field the extension has honored since 1.3.5 (validated kernel-side: only `type:"normal"` windows can host a lane group; a bad/non-normal id returns a clear error). Threaded through `sendCommand` → the WS `EXECUTE` message, and consumed on the first line of a multi-line execute (same lifecycle as `initial_url`/`group_name`). Logged in the `EXECUTE received:` audit line.
+- **`MCP_INSTRUCTIONS` best-practice section "CHOOSING THE WINDOW FOR A NEW LANE"** — enumerate windows from shared mode (`windows` / `ls --json ~/windows`, which now report each window's `type`), pick a `"normal"` one, pass its id as `window_id`; if there are no normal windows, surface a HITL error rather than minting blindly. Also flags the enumeration gotcha: when already attached to a lane, `windows` lists only that lane's tabs, so enumerate before minting.
+
+### Notes — MCP server (`2.0.10`)
+
+- **Fully backward-compatible.** `window_id` is additive and optional — every existing caller (CLI-Anything, kgspin drives, Claude Desktop) works unchanged. Extensions older than 1.3.5 silently ignore it (the tab lands in the current window, as before). No Chrome Web Store action — the kernel side already shipped in 1.3.5.
+- **Why it exists:** without a window hint, a lane's tab is created in Chrome's *current* window, and if that's a non-normal window (popup/devtools/app), `chrome.tabs.group()` fails. `window_id` makes placement deterministic and also lets a drive put its lane in a dedicated window away from the operator's real tabs.
+
 ## Chrome extension `1.3.5` — 2026-07-27
 
 Non-breaking, backward-compatible extension release adding **deliberate window placement for lane creation**. Motivated by the theorized (not-yet-observed) mint failure where a lane's working tab lands in a non-normal window (popup/devtools/app), making `chrome.tabs.group()` fail with "Grouping is only supported for normal browser windows." Rather than have the kernel guess a window, this gives the *caller* explicit control: enumerate windows, pick a normal one, pin the lane to it. Also a genuinely useful capability beyond the failure — a drive can place its lane in a dedicated window away from the operator's real tabs.

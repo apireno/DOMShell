@@ -12,7 +12,7 @@ import { resolve as resolvePath } from "node:path";
 // Surfaced by the domshell_about tool so integrators can pin-verify which
 // server version answered a call, and echoed in the connection log for
 // server-side triage.
-const MCP_SERVER_VERSION = "2.0.9";
+const MCP_SERVER_VERSION = "2.0.10";
 
 // ---- CLI Flags ----
 
@@ -449,6 +449,7 @@ function sendCommand(
   groupId?: string,
   initialUrl?: string,
   groupName?: string,
+  windowId?: number,
 ): Promise<{ result: string; laneId: string | null }> {
   return new Promise((resolve, reject) => {
     if (!extensionClient || extensionClient.readyState !== 1) {
@@ -475,6 +476,10 @@ function sendCommand(
     // forward-compatible: old extensions still create an about:blank tab
     // titled `🐚 agent` (existing behavior; no regression). Tracked
     // kernel-side as DOMShell #52.
+    //   - windowId (2.0.10) pins the new lane's working tab to a specific
+    //     (normal) Chrome window. Honored by extension 1.3.5+; silently
+    //     ignored by older extensions (tab lands in the current window as
+    //     before — no regression). See DOMShell window-targeting.
     extensionClient.send(
       JSON.stringify({
         type: "EXECUTE",
@@ -483,6 +488,7 @@ function sendCommand(
         groupId,
         initialUrl,
         groupName,
+        windowId,
         command,
         allowedDomains: ALLOWED_DOMAINS.length > 0 ? ALLOWED_DOMAINS : undefined,
       })
@@ -496,6 +502,7 @@ async function execWithSecurity(
   groupId?: string,
   initialUrl?: string,
   groupName?: string,
+  windowId?: number,
 ): Promise<{ result: string; laneId: string | null }> {
   // Check tier
   const check = isCommandAllowed(command);
@@ -520,7 +527,7 @@ async function execWithSecurity(
   audit(`${tag}EXECUTE: ${command}`);
 
   try {
-    const r = await sendCommand(command, sessionId, groupId, initialUrl, groupName);
+    const r = await sendCommand(command, sessionId, groupId, initialUrl, groupName, windowId);
     const result = redactSensitiveOutput(command, r.result);
     // Give error-ish results a generous cap so the actual cause survives in the
     // audit log (2.0.9). The prior flat 80-char truncation ate mint-failure
@@ -586,6 +593,26 @@ When you pass group_id="new", pass two optional fields on the same call for a cl
 - group_name titles the Chrome tab group so you and downstream sweeps can identify it later.
 
 Honored by DOMShell extension 1.3.2+; silently ignored by extension 1.3.1 — older extensions still create an about:blank tab titled 'agent', so the worst case is the existing behavior. Safe to always pass both.
+
+CHOOSING THE WINDOW FOR A NEW LANE (window_id)
+A lane group can ONLY be created in a *normal* Chrome window. Without window_id, the lane's tab is created in Chrome's CURRENT window — and if that happens to be a popup, devtools, or an installed-PWA/app window, the mint fails. To be deterministic (and to place your lane away from the operator's real tabs), pick the window yourself:
+
+1) Enumerate windows and find a normal one. From shared mode (a fresh connection, before you mint), run:
+     domshell_execute({ command: "ls --json ~/windows" })     // or: command: "windows"
+   Each window reports a 'type': "normal" | "popup" | "app" | "devtools". Only "normal" can host a lane.
+2) Pass that window's id as window_id when you mint:
+     domshell_execute({
+       command: "text main",
+       group_id: "new",
+       group_name: "qa-ux-shopkit-sprint12",
+       initial_url: "https://example.com/article",
+       window_id: 386959650
+     })
+3) If there are NO normal windows open, do not mint blindly — tell the user to open a normal browser window, then retry. (A bad or non-normal window_id returns a clear error: "window <id> is a '<type>' window" / "window <id> not found".)
+
+NOTE on enumeration: when you are already ATTACHED to a lane, 'windows' / 'ls ~/windows' list only that lane's tabs — so enumerate windows from shared mode BEFORE you mint, not from inside an existing lane.
+
+window_id is honored by DOMShell extension 1.3.5+; silently ignored by older extensions (the tab lands in the current window as before — no regression). Ignored unless group_id="new".
 
 LANE NAMING + GARBAGE COLLECTION (your responsibility)
 Every lane you create with group_id="new" is a Chrome tab group that persists until something closes it. Leaving lanes open after your task is done leaks tabs and clutters the user's browser. Two patterns to apply, in order of preference:
@@ -1347,9 +1374,10 @@ NOTES
       group_id: z.string().optional().describe("Which session lane to run in. Pass \"new\" to create a fresh isolated lane, \"shared\" to explicitly opt into the default per-connection lane (shared across any multiplexed clients on this MCP connection, still isolated from the user's tabs), or a numeric lane id to join an existing lane (handoff). Every response ends with a '[lane: <id>]' line — pass that id back as group_id to stay in the same lane. NOTE: omitting group_id is DEPRECATED — currently maps to the shared lane but will be required in a future major release."),
       initial_url: z.string().optional().describe("OPTIONAL, only meaningful when group_id=\"new\". When set, the new lane's working tab is created with this URL loaded instead of `about:blank` — the lane is ready to use by the time `command` runs (no extra `open <url>` round-trip, no dangling about:blank tab, cursor lands inside the loaded tab). Saves one round-trip when you already know the page you want to start on, e.g. `domshell_execute({command: \"text main\", group_id: \"new\", initial_url: \"https://example.com/article\"})`. Honored by DOMShell extension 1.3.2+; silently ignored by 1.3.1 (the lane is still created with an about:blank placeholder — same behavior as today, no regression). Ignored if group_id is anything other than \"new\"."),
       group_name: z.string().optional().describe("OPTIONAL, only meaningful when group_id=\"new\". Names the new lane's Chrome tab group (shows as `🐚 <group_name>` in Chrome's tab strip) so you and downstream garbage-collection sweeps can identify it later. Recommended convention: `<task-type>-<scope>-<run-id-or-sprint>`, e.g. `qa-ux-shopkit-sprint12` or `research-articles-2026-06-18`. Lanes without a name fall back to a generic `agent` title — fine for one-off use but makes garbage-collection by name pattern impossible. Honored by DOMShell extension 1.3.2+; silently ignored by 1.3.1 (lane still created with title `agent` — existing behavior, no regression). Ignored if group_id is anything other than \"new\"."),
+      window_id: z.number().optional().describe("OPTIONAL, only meaningful when group_id=\"new\". Pins the new lane's working tab to a specific Chrome window (its numeric id). Without it, the tab is created in Chrome's CURRENT window — which, if that window happens to be a non-normal window (a popup, devtools, or an installed-PWA/app window), makes the tab group fail to create. BEST PRACTICE: before minting, run `windows` (or `ls --json ~/windows`) and pick a window whose `type` is `\"normal\"`; pass that id here. Only normal windows can host a lane group — the extension validates this and returns an error like `window <id> is a '<type>' window` if you pass a non-normal id, or `window <id> not found` for a bad id. If there are NO normal windows open, do not mint blindly — surface that to the user (they need to open a normal browser window). Also useful for deliberate placement: put your lane in a dedicated window away from the operator's real tabs. Honored by DOMShell extension 1.3.5+; silently ignored by older extensions (tab lands in the current window as before — no regression). Ignored if group_id is anything other than \"new\"."),
     },
     ANNO_WRITE,
-    async ({ command, group_id, initial_url, group_name }) => {
+    async ({ command, group_id, initial_url, group_name, window_id }) => {
       // Diagnostic audit (2.0.7, #kgspin-2026-06-30): log the received wire
       // values verbatim on every EXECUTE. The server-side [DEPRECATION]
       // "group_id omitted" footer fires only when group_id === undefined
@@ -1362,6 +1390,7 @@ NOTES
         `EXECUTE received: group_id=${JSON.stringify(group_id)} ` +
         `initial_url=${JSON.stringify(initial_url)} ` +
         `group_name=${JSON.stringify(group_name)} ` +
+        `window_id=${JSON.stringify(window_id)} ` +
         `command=${JSON.stringify(cmdPreview)}`
       );
 
@@ -1387,6 +1416,7 @@ NOTES
       // silently dropped. Outside group_id="new", they are also ignored.
       let pendingInitialUrl = (resolvedGroupId === "new") ? initial_url : undefined;
       let pendingGroupName  = (resolvedGroupId === "new") ? group_name  : undefined;
+      let pendingWindowId   = (resolvedGroupId === "new") ? window_id   : undefined;
       // Response-validation gate (2.0.7, #kgspin-2026-06-30): if the drive
       // asks for group_id="new" and the extension's reply doesn't carry a
       // numeric lane id, the mint didn't produce an isolated lane — the
@@ -1402,7 +1432,7 @@ NOTES
       for (const line of lines) {
         if (lines.length > 1) out.push(`$ ${line}`);
         const mintingNow = lane === "new";
-        const r = await execWithSecurity(line, sidRef.sid, lane, pendingInitialUrl, pendingGroupName);
+        const r = await execWithSecurity(line, sidRef.sid, lane, pendingInitialUrl, pendingGroupName, pendingWindowId);
         if (mintingNow && (r.laneId === null || !/^\d+$/.test(r.laneId))) {
           // FORWARD the extension's reason (2.0.9). Since extension 1.3.4,
           // createAgentLane surfaces the real Chrome error (e.g. "group new:
@@ -1435,9 +1465,10 @@ NOTES
         // After the first command "new" has materialized — reuse the real id so
         // the remaining commands run in the same lane, not a new one each time.
         if (lane === "new" && r.laneId) lane = r.laneId;
-        // initial_url + group_name have been consumed by the first line — clear them.
+        // initial_url + group_name + window_id have been consumed by the first line — clear them.
         pendingInitialUrl = undefined;
         pendingGroupName = undefined;
+        pendingWindowId = undefined;
       }
       if (mintFailedError !== null) {
         return { content: [{ type: "text", text: mintFailedError }] };

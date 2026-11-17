@@ -12,7 +12,7 @@ import { resolve as resolvePath } from "node:path";
 // Surfaced by the domshell_about tool so integrators can pin-verify which
 // server version answered a call, and echoed in the connection log for
 // server-side triage.
-const MCP_SERVER_VERSION = "2.0.10";
+const MCP_SERVER_VERSION = "2.0.11";
 
 // ---- CLI Flags ----
 

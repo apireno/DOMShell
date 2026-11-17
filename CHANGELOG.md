@@ -3,6 +3,30 @@
 Notable changes to DOMShell — the Chrome extension and the `@apireno/domshell` MCP server.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The two artifacts version independently.
 
+## MCP server `2.0.11` — 2026-11-16 (security)
+
+Server-only dependency patch. Upgrades `@modelcontextprotocol/sdk` past the upstream advisory [GHSA-f897-62hf-6gxq](https://github.com/modelcontextprotocol/typescript-sdk/security/advisories/GHSA-f897-62hf-6gxq) (HTTP server transports did not limit JSON-RPC batch length), reported to us by **Boundary / OraXLabs** from a source-only review of the 2.0.10 container build. Also refreshes the lockfile's other transitive dependencies to their patched releases. **No DOMShell source changes** besides the version constant; no Chrome Web Store action.
+
+### Security — MCP server (`2.0.11`)
+
+- **`@modelcontextprotocol/sdk` `1.26.0` → `1.32.2`; minimum supported version raised from `^1.26.0` to `^1.32.0`.** In 2.0.10 the Streamable HTTP path (`POST /mcp`) passed an existing session's request body to `StreamableHTTPServerTransport.handleRequest` with no JSON-RPC batch-count limit, so a client holding a valid token and session id could submit an arbitrarily long batch (bounded only by `express.json()`'s 100 KB body limit) and tie up the server. SDK `1.30.1`+ rejects batches over 100 messages with `400`. Verified against both builds: a 150-message batch on an authenticated session is fully processed by 2.0.10 (`200`) and rejected by 2.0.11 (`400 — Batch must not exceed 100 messages`).
+
+  The floor is `1.32.0` rather than the advisory's `1.30.1` because SDK releases up to `1.31.x` carry further advisories, notably [GHSA-46jr-4wx8-v453](https://github.com/advisories/GHSA-46jr-4wx8-v453) (a single in-limit HTTP request can exhaust memory during validation), the same availability class on the same endpoint. The others fixed by `1.32.0` ([GHSA-22jm-h49p-29qw](https://github.com/advisories/GHSA-22jm-h49p-29qw), [GHSA-rvq5-wwqv-78pq](https://github.com/advisories/GHSA-rvq5-wwqv-78pq), [GHSA-6qxp-vccf-f47h](https://github.com/advisories/GHSA-6qxp-vccf-f47h), [GHSA-6prh-2h8m-c8cw](https://github.com/advisories/GHSA-6prh-2h8m-c8cw)) cover SDK features DOMShell does not use (experimental tasks, SDK bearer auth, OAuth client, client transports).
+
+- **Lockfile refresh of transitive dependencies, all within existing semver ranges.** Two are reachable in DOMShell's runtime:
+  - `body-parser` `1.20.4` → `1.20.9` ([GHSA-27r3-jxmh-p828](https://github.com/advisories/GHSA-27r3-jxmh-p828), DoS via trailing bytes after a compressed body). Reachable **before authentication**, because `express.json()` runs ahead of the `/mcp` token check.
+  - `ws` `8.19.0` → `8.23.0` ([GHSA-96hv-2xvq-fx4p](https://github.com/advisories/GHSA-96hv-2xvq-fx4p), memory exhaustion from tiny fragments) on the extension WebSocket bridge, which validates the token only after the connection opens.
+
+  Also updated, though not reachable from DOMShell's code paths: `express` `4.22.3` (with `qs` `6.16.2`, `proxy-addr` `2.0.8`, `path-to-regexp` `0.1.13`), plus the SDK's own `hono`, `@hono/node-server`, `express-rate-limit`, `ip-address`, `ajv` and `fast-uri`.
+
+### Notes — MCP server (`2.0.11`)
+
+- **Who was exposed:** only the Streamable HTTP listener, i.e. the optional container / ToolHive path (the Dockerfile's `npm ci` pins the committed lock) and any native install that resolved an SDK older than the fix. Every batch path sits behind DOMShell's bearer token, so exploitation required a token holder, who can already drive the browser. The stdio transport is outside the advisory. Container users should rebuild (`docker compose build && docker compose up -d`).
+- **`npx @apireno/domshell` installs** resolve dependencies fresh at install time (the published package ships no lock), so they were already picking up the fixed SDK; 2.0.11 makes that the guaranteed minimum.
+- **Fully backward-compatible.** No tool, parameter or wire-format change. CLI-Anything, kgspin drives and Claude Desktop work unchanged. The SDK's new 4 MiB body cap never triggers before DOMShell's own 100 KB limit.
+- **Known remaining audit item:** `zod` 3.x ([GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5)) is fixed only in zod 4, a major migration deferred to a later release. DOMShell's tool schemas contain no size-constrained arrays or records, the condition the advisory requires.
+- Credit: Boundary / OraXLabs, source-review report against the pinned 2.0.10 checkout.
+
 ## MCP server `2.0.10` — 2026-08-14
 
 Server-only patch, the MCP half of the window-targeting feature whose kernel support shipped in extension **1.3.5** (now live in the Chrome Web Store). Adds an optional `window_id` parameter to `domshell_execute` and documents the best practice. Forward-compat-safe: older extensions silently ignore the field.
